@@ -1,17 +1,52 @@
-# music_player
+# ASMRPlayer
 
-A new Flutter project.
+一个基于 Flutter 的本地音频播放器，面向白噪音/ASMR 场景，支持多音频并行播放和独立控制。
 
-## Getting Started
+## 应用特色
 
-This project is a starting point for a Flutter application.
+- 支持同时播放多个音频任务（并行播放，不互相抢占）。
+- 每个播放任务可单独调节音量，方便混音搭配。
+- 每个任务可独立暂停/继续、切歌、拖动进度、关闭任务。
+- 提供多种循环模式：单曲循环、随机循环、文件夹循环、跨文件夹循环。
+- 支持导入整个文件夹或单独文件，并可自动刷新已监听目录。
 
-A few resources to get you started if this is your first Flutter project:
+## 主要功能
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+- 文件管理页：导入文件夹/单文件、刷新监听目录、目录树展示音频。
+- 播放列表页：管理正在运行的播放任务，支持全局暂停、清空任务、任务内切歌与音量控制。
+- 设置页：深色模式切换、临时缓存清理。
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## 运行环境
+
+- Flutter SDK（建议 3.x）
+- Dart SDK（`pubspec.yaml` 中为 `^3.11.1`）
+- Android 设备或模拟器（当前项目主要面向 Android 本地媒体访问）
+
+## 快速开始
+
+```bash
+flutter pub get
+flutter run
+```
+
+## 使用方式
+
+1. 在“文件管理”页导入音频文件夹或单个音频文件。
+2. 点击音频条目的播放按钮，创建一个播放任务。
+3. 重复创建多个任务后，即可实现多音频同时播放。
+4. 进入“播放列表”页，在每个任务卡片内单独调节音量，完成混音效果。
+
+## 项目结构
+
+```text
+lib/
+  main.dart
+  providers/
+    audio_provider.dart      # 多会话并行播放核心逻辑
+  screens/
+    library_tab.dart         # 文件导入与库管理
+    playlist_tab.dart        # 播放任务与单任务控制
+    settings_tab.dart        # 主题与缓存设置
+  theme/
+    theme_provider.dart
+```
