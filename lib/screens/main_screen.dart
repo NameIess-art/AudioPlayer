@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'library_tab.dart';
 import 'playlist_tab.dart';
 import 'settings_tab.dart';
+import 'video_converter_tab.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -16,6 +17,7 @@ class _MainScreenState extends State<MainScreen> {
   final List<Widget> _pages = [
     const LibraryTab(),
     const PlaylistTab(),
+    const VideoConverterTab(),
     const SettingsTab(),
   ];
 
@@ -43,6 +45,11 @@ class _MainScreenState extends State<MainScreen> {
             icon: Icon(Icons.queue_music_outlined),
             selectedIcon: Icon(Icons.queue_music_rounded),
             label: '播放列表',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.sync_outlined),
+            selectedIcon: Icon(Icons.sync_rounded),
+            label: '视频转音频',
           ),
           NavigationDestination(
             icon: Icon(Icons.settings_outlined),
