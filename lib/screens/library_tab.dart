@@ -333,75 +333,84 @@ class _LibraryTabState extends State<LibraryTab> {
       child: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.all(16.0),
+            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
             child: Row(
               children: [
                 const Icon(Icons.library_music_rounded, size: 28),
-                const SizedBox(width: 12),
+                const SizedBox(width: 8),
                 Text(
                   '我的音频库',
-                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold),
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
                 ),
+                const SizedBox(width: 8),
+                if (provider.library.isNotEmpty)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.primaryContainer,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      '共 ${provider.library.length} 首',
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                            color: Theme.of(context).colorScheme.onPrimaryContainer,
+                            fontWeight: FontWeight.w600,
+                          ),
+                    ),
+                  ),
                 const Spacer(),
                 if (provider.isScanning)
                   const SizedBox(
-                    width: 20, height: 20,
+                    width: 20,
+                    height: 20,
                     child: CircularProgressIndicator(strokeWidth: 2.2),
-                )
+                  )
                 else
-                  IconButton(
-                    icon: const Icon(Icons.refresh_rounded),
-                    tooltip: '刷新监听文件夹',
-                    onPressed: provider.watchedFolders.isEmpty
-                        ? null
-                        : () => _refreshWatchedFolders(),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.refresh_rounded),
+                        tooltip: '刷新监听文件夹',
+                        onPressed: provider.watchedFolders.isEmpty
+                            ? null
+                            : () => _refreshWatchedFolders(),
+                      ),
+                      PopupMenuButton<int>(
+                        icon: const Icon(Icons.add_circle_outline_rounded),
+                        tooltip: '导入音频',
+                        onSelected: (value) {
+                          if (value == 0) _addFolder();
+                          if (value == 1) _addFiles();
+                        },
+                        itemBuilder: (context) => [
+                          const PopupMenuItem(
+                            value: 0,
+                            child: Row(
+                              children: [
+                                Icon(Icons.create_new_folder_rounded, size: 20),
+                                SizedBox(width: 12),
+                                Text('导入文件夹'),
+                              ],
+                            ),
+                          ),
+                          const PopupMenuItem(
+                            value: 1,
+                            child: Row(
+                              children: [
+                                Icon(Icons.upload_file_rounded, size: 20),
+                                SizedBox(width: 12),
+                                Text('导入文件'),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
               ],
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0),
-            child: Row(
-              children: [
-                Expanded(
-                  child: FilledButton.tonalIcon(
-                    onPressed: provider.isScanning ? null : _addFolder,
-                    icon: const Icon(Icons.create_new_folder_rounded),
-                    label: const Text('导入文件夹'),
-                    style: FilledButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: provider.isScanning ? null : _addFiles,
-                    icon: const Icon(Icons.upload_file_rounded),
-                    label: const Text('导入文件'),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Row(
-              children: [
-                Icon(Icons.folder_shared_rounded, size: 28, color: Theme.of(context).colorScheme.primary),
-                const SizedBox(width: 8),
-                Text('本地目录树', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
-                const Spacer(),
-                if (provider.library.isNotEmpty)
-                  Text('${provider.library.length} 首歌曲', style: Theme.of(context).textTheme.bodySmall),
-              ],
-            ),
-          ),
-          
           Expanded(
             child: provider.library.isEmpty
                 ? const Center(

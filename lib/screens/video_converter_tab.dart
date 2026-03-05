@@ -2,11 +2,11 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:ffmpeg_kit_flutter_audio/ffmpeg_kit.dart';
-import 'package:ffmpeg_kit_flutter_audio/ffmpeg_kit_config.dart';
-import 'package:ffmpeg_kit_flutter_audio/return_code.dart';
-import 'package:ffmpeg_kit_flutter_audio/statistics.dart';
-import 'package:ffmpeg_kit_flutter_audio/ffprobe_kit.dart';
+import 'package:ffmpeg_kit_flutter_new_audio/ffmpeg_kit.dart';
+import 'package:ffmpeg_kit_flutter_new_audio/ffmpeg_kit_config.dart';
+import 'package:ffmpeg_kit_flutter_new_audio/return_code.dart';
+import 'package:ffmpeg_kit_flutter_new_audio/statistics.dart';
+import 'package:ffmpeg_kit_flutter_new_audio/ffprobe_kit.dart';
 import 'package:path/path.dart' as path;
 
 class VideoConverterTab extends StatefulWidget {
@@ -128,6 +128,18 @@ class _VideoConverterTabState extends State<VideoConverterTab> {
           _isConverting = false;
           _progress = 1.0;
           _statusMessage = '转换完成！已保存至: $outputPath';
+          
+          // Reset form fields after brief delay
+          Future.delayed(const Duration(seconds: 3), () {
+            if (mounted) {
+              setState(() {
+                _selectedVideoPath = null;
+                _progress = 0.0;
+                _videoDurationMs = 0;
+                _statusMessage = '请选择视频文件并设置转换参数';
+              });
+            }
+          });
         });
       } else if (ReturnCode.isCancel(returnCode)) {
         setState(() {
@@ -157,101 +169,136 @@ class _VideoConverterTabState extends State<VideoConverterTab> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('视频转音频'),
+        title: const Text('视频转音频', style: TextStyle(fontWeight: FontWeight.bold)),
         centerTitle: false,
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16.0),
+        padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 24.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             // Video File Selection
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
                   children: [
-                    const Text('1. 选择视频', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            _selectedVideoPath ?? '未选择视频文件',
-                            style: TextStyle(
-                              color: _selectedVideoPath == null ? Colors.grey : null,
-                            ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        ElevatedButton.icon(
-                          onPressed: _isConverting ? null : _pickVideoFile,
-                          icon: const Icon(Icons.video_file),
-                          label: const Text('选择'),
-                        ),
-                      ],
-                    ),
+                    Icon(Icons.video_library_rounded, color: Theme.of(context).colorScheme.primary),
+                    const SizedBox(width: 8),
+                    const Text('选择视频来源', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                   ],
                 ),
-              ),
+                const SizedBox(height: 16),
+                    InkWell(
+                      onTap: _isConverting ? null : _pickVideoFile,
+                      borderRadius: BorderRadius.circular(12),
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: _selectedVideoPath == null
+                                ? Theme.of(context).colorScheme.outlineVariant
+                                : Theme.of(context).colorScheme.primary.withValues(alpha: 0.5),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                _selectedVideoPath ?? '轻触选择要转换的视频文件',
+                                style: TextStyle(
+                                  color: _selectedVideoPath == null
+                                      ? Theme.of(context).colorScheme.onSurfaceVariant
+                                      : Theme.of(context).colorScheme.onSurface,
+                                ),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Icon(Icons.folder_open_rounded, color: Theme.of(context).colorScheme.primary),
+                          ],
+                        ),
+                      ),
+                    ),
+              ],
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 32),
 
             // Output Directory Selection
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
                   children: [
-                    const Text('2. 输出位置', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            _outputDirectoryPath ?? '未选择输出文件夹',
-                            style: TextStyle(
-                              color: _outputDirectoryPath == null ? Colors.grey : null,
-                            ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        ElevatedButton.icon(
-                          onPressed: _isConverting ? null : _pickOutputDirectory,
-                          icon: const Icon(Icons.folder),
-                          label: const Text('选择'),
-                        ),
-                      ],
-                    ),
+                    Icon(Icons.create_new_folder_rounded, color: Theme.of(context).colorScheme.primary),
+                    const SizedBox(width: 8),
+                    const Text('选择保存位置', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                   ],
                 ),
-              ),
+                const SizedBox(height: 16),
+                    InkWell(
+                      onTap: _isConverting ? null : _pickOutputDirectory,
+                      borderRadius: BorderRadius.circular(12),
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: _outputDirectoryPath == null
+                                ? Theme.of(context).colorScheme.outlineVariant
+                                : Theme.of(context).colorScheme.primary.withValues(alpha: 0.5),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                _outputDirectoryPath ?? '轻触选择音频保存的文件夹',
+                                style: TextStyle(
+                                  color: _outputDirectoryPath == null
+                                      ? Theme.of(context).colorScheme.onSurfaceVariant
+                                      : Theme.of(context).colorScheme.onSurface,
+                                ),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Icon(Icons.folder_open_rounded, color: Theme.of(context).colorScheme.primary),
+                          ],
+                        ),
+                      ),
+                    ),
+              ],
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 32),
 
             // Output Settings
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
                   children: [
-                    const Text('3. 转换设置', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 16),
+                    Icon(Icons.settings_suggest_rounded, color: Theme.of(context).colorScheme.primary),
+                    const SizedBox(width: 8),
+                    const Text('转换参数设置', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  ],
+                ),
+                const SizedBox(height: 20),
                     Row(
                       children: [
                         Expanded(
                           child: InputDecorator(
-                            decoration: const InputDecoration(
+                            decoration: InputDecoration(
                               labelText: '目标格式',
-                              border: OutlineInputBorder(),
-                              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                             ),
                             child: DropdownButtonHideUnderline(
                               child: DropdownButton<String>(
@@ -261,7 +308,7 @@ class _VideoConverterTabState extends State<VideoConverterTab> {
                                 items: _formats.map((format) {
                                   return DropdownMenuItem(
                                     value: format,
-                                    child: Text(format.toUpperCase()),
+                                    child: Text(format.toUpperCase(), style: const TextStyle(fontWeight: FontWeight.w600)),
                                   );
                                 }).toList(),
                                 onChanged: _isConverting
@@ -280,10 +327,10 @@ class _VideoConverterTabState extends State<VideoConverterTab> {
                         const SizedBox(width: 16),
                         Expanded(
                           child: InputDecorator(
-                            decoration: const InputDecoration(
+                            decoration: InputDecoration(
                               labelText: '音频码率',
-                              border: OutlineInputBorder(),
-                              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                             ),
                             child: DropdownButtonHideUnderline(
                               child: DropdownButton<String>(
@@ -293,7 +340,7 @@ class _VideoConverterTabState extends State<VideoConverterTab> {
                                 items: _bitrates.map((bitrate) {
                                   return DropdownMenuItem(
                                     value: bitrate,
-                                    child: Text(bitrate),
+                                    child: Text(bitrate, style: const TextStyle(fontWeight: FontWeight.w600)),
                                   );
                                 }).toList(),
                                 onChanged: _isConverting || _selectedFormat == 'wav' || _selectedFormat == 'flac'
@@ -311,18 +358,24 @@ class _VideoConverterTabState extends State<VideoConverterTab> {
                         ),
                       ],
                     ),
-                  ],
-                ),
-              ),
+              ],
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 48),
 
             // Conversion Progress and Status
             if (_isConverting || _progress > 0) ...[
-              LinearProgressIndicator(
-                value: _isConverting && _videoDurationMs == 0 ? null : _progress,
-                minHeight: 10,
-                borderRadius: BorderRadius.circular(5),
+              TweenAnimationBuilder<double>(
+                duration: const Duration(milliseconds: 250),
+                curve: Curves.easeInOut,
+                tween: Tween<double>(
+                  begin: 0,
+                  end: _isConverting && _videoDurationMs == 0 ? 0 : _progress,
+                ),
+                builder: (context, value, _) => LinearProgressIndicator(
+                  value: _isConverting && _videoDurationMs == 0 ? null : value,
+                  minHeight: 8,
+                  borderRadius: BorderRadius.circular(4),
+                ),
               ),
               const SizedBox(height: 16),
             ],
@@ -331,33 +384,37 @@ class _VideoConverterTabState extends State<VideoConverterTab> {
               _statusMessage,
               textAlign: TextAlign.center,
               style: TextStyle(
-                color: _isConverting ? Colors.blue : null,
-                fontWeight: FontWeight.w500,
+                color: _isConverting ? Theme.of(context).colorScheme.primary : Theme.of(context).colorScheme.onSurfaceVariant,
+                fontWeight: FontWeight.w600,
+                fontSize: 15,
               ),
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 32),
 
             // Action Buttons
             if (_isConverting)
-              ElevatedButton.icon(
+              FilledButton.icon(
                 onPressed: _cancelConversion,
-                icon: const Icon(Icons.cancel),
-                label: const Text('取消转换'),
-                style: ElevatedButton.styleFrom(
-                  foregroundColor: Colors.white,
-                  backgroundColor: Colors.red,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
+                icon: const Icon(Icons.cancel_rounded),
+                label: const Text('取消转换', style: TextStyle(fontSize: 16)),
+                style: FilledButton.styleFrom(
+                  backgroundColor: Theme.of(context).colorScheme.error,
+                  foregroundColor: Theme.of(context).colorScheme.onError,
+                  padding: const EdgeInsets.symmetric(vertical: 18),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                 ),
               )
             else
-              ElevatedButton.icon(
+              FilledButton.icon(
                 onPressed: _selectedVideoPath != null && _outputDirectoryPath != null ? _startConversion : null,
-                icon: const Icon(Icons.transform),
-                label: const Text('开始转换'),
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
+                icon: const Icon(Icons.transform_rounded),
+                label: const Text('开始转换', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 18),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                 ),
               ),
+            const SizedBox(height: 24),
           ],
         ),
       ),
