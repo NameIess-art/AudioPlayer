@@ -1,0 +1,18 @@
+Analyzing MusicPlayer...                                        
+
+  error - The name 'removeTrackFromLibrary' is already defined - lib\providers\audio_provider.dart:460:8 - duplicate_definition
+  error - The method 'buildGroups' isn't defined for the type 'AudioProvider' - lib\providers\audio_provider.dart:480:29 - undefined_method
+  error - Undefined name 'path' - lib\providers\audio_provider.dart:541:26 - undefined_identifier
+  error - Undefined name 'path' - lib\providers\audio_provider.dart:551:31 - undefined_identifier
+  error - Undefined name 'path' - lib\providers\audio_provider.dart:553:36 - undefined_identifier
+  error - Undefined name 'path' - lib\providers\audio_provider.dart:558:46 - undefined_identifier
+  error - Undefined name 'path' - lib\providers\audio_provider.dart:560:31 - undefined_identifier
+warning - The declaration '_addFolder' isn't referenced - lib\screens\library_tab.dart:81:16 - unused_element
+warning - The declaration '_addFiles' isn't referenced - lib\screens\library_tab.dart:125:16 - unused_element
+warning - The declaration '_confirmRemoveGroup' isn't referenced - lib\screens\library_tab.dart:327:16 - unused_element
+  error - Undefined class 'TrackGroup' - lib\screens\library_tab.dart:327:82 - undefined_class
+  error - The method 'removeGroupFromLibrary' isn't defined for the type 'AudioProvider' - lib\screens\library_tab.dart:350:16 - undefined_method
+warning - The value of the local variable 'groups' isn't used - lib\screens\library_tab.dart:360:11 - unused_local_variable
+  error - The method 'buildGroups' isn't defined for the type 'AudioProvider' - lib\screens\library_tab.dart:360:29 - undefined_method
+
+14 issues found. (ran in 8.0s)
