@@ -56,7 +56,7 @@ class PlaylistTab extends StatelessWidget {
                 const Icon(Icons.dashboard_rounded, size: 28),
                 const SizedBox(width: 12),
                 Text(
-                  '运行中的播放任务',
+                  '播放列表',
                   style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold),
                 ),
                 const Spacer(),

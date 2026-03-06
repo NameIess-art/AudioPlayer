@@ -37,7 +37,7 @@ class SettingsTab extends StatelessWidget {
             child: Column(
               children: [
                 SwitchListTile(
-                  title: const Text('深色模式 (Dark Mode)'),
+                  title: const Text('深色模式'),
                   subtitle: const Text('开启以获得更为沉浸的夜间体验'),
                   secondary: const Icon(Icons.dark_mode_rounded),
                   value: themeProvider.isDarkMode,

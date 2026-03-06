@@ -11,6 +11,8 @@ import 'package:path/path.dart' as path;
 
 enum SessionLoopMode { single, random, folder, crossFolder }
 
+enum TimerMode { manual, trigger }
+
 extension SessionLoopModeExtension on SessionLoopMode {
   String get label {
     switch (this) {
@@ -140,6 +142,7 @@ const _kSessionsKey = 'active_sessions_v1';
 const _kGroupOrderKey = 'group_order_v1';
 const _kSessionOrderKey = 'session_order_v1';
 const _kWatchedFoldersKey = 'watched_folders_v1';
+const _kTimerSettingsKey = 'timer_settings_v1';
 
 class AudioProvider with ChangeNotifier {
   final List<MusicTrack> _library = [];
@@ -154,6 +157,34 @@ class AudioProvider with ChangeNotifier {
 
   int _sessionSeed = 0;
   bool _isScanning = false;
+
+  // ---------------------------------------------------------------------------
+  // Timer state
+  // ---------------------------------------------------------------------------
+  TimerMode? _timerMode;
+  Duration? _timerDuration;
+  bool _timerActive = false;
+  Duration? _timerRemaining;
+  Timer? _countdownTimer;
+
+  // Tracks paused when the timer expired (for auto-resume)
+  final List<String> _pausedByTimerPaths = [];
+
+  // Auto-resume (clock-time alarm style)
+  bool _autoResumeEnabled = false;
+  int _autoResumeHour = 7;
+  int _autoResumeMinute = 0;
+  Timer? _autoResumeTimer;
+
+  // Getters
+  TimerMode? get timerMode => _timerMode;
+  Duration? get timerDuration => _timerDuration;
+  bool get timerActive => _timerActive;
+  Duration? get timerRemaining => _timerRemaining;
+  bool get autoResumeEnabled => _autoResumeEnabled;
+  int get autoResumeHour => _autoResumeHour;
+  int get autoResumeMinute => _autoResumeMinute;
+  List<String> get pausedByTimerPaths => List.unmodifiable(_pausedByTimerPaths);
 
   List<MusicTrack> get library => _library;
   List<String> get watchedFolders => List.unmodifiable(_watchedFolders);
@@ -180,6 +211,8 @@ class AudioProvider with ChangeNotifier {
 
   @override
   void dispose() {
+    _countdownTimer?.cancel();
+    _autoResumeTimer?.cancel();
     for (final session in _sessions.values) {
       session.dispose();
     }
@@ -261,6 +294,7 @@ class AudioProvider with ChangeNotifier {
     await _loadGroupOrder();
     await _loadSessionOrder();
     await _loadWatchedFolders();
+    await _loadTimerSettings();
     await _loadSessions();
   }
 
@@ -366,6 +400,35 @@ class AudioProvider with ChangeNotifier {
       await prefs.setString(_kWatchedFoldersKey, json.encode(_watchedFolders));
     } catch (_) {}
   }
+
+  // ---------------------------------------------------------------------------
+  // Timer Settings persistence
+  // ---------------------------------------------------------------------------
+
+  Future<void> _loadTimerSettings() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_kTimerSettingsKey);
+      if (raw == null || raw.isEmpty) return;
+      final map = json.decode(raw) as Map<String, dynamic>;
+      _autoResumeEnabled = map['autoResumeEnabled'] as bool? ?? false;
+      _autoResumeHour = map['autoResumeHour'] as int? ?? 7;
+      _autoResumeMinute = map['autoResumeMinute'] as int? ?? 0;
+    } catch (_) {}
+  }
+
+  Future<void> _saveTimerSettings() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final encoded = json.encode({
+        'autoResumeEnabled': _autoResumeEnabled,
+        'autoResumeHour': _autoResumeHour,
+        'autoResumeMinute': _autoResumeMinute,
+      });
+      await prefs.setString(_kTimerSettingsKey, encoded);
+    } catch (_) {}
+  }
+
 
   /// Register [folderPath] as a watched folder (idempotent).
   void addWatchedFolder(String folderPath) {
@@ -641,6 +704,7 @@ class AudioProvider with ChangeNotifier {
     // previous source are ignored.
     session.loadGeneration++;
     session.isLoading = true;
+    final willLoadNewAudio = session.loadedPath != nextPath;
     notifyListeners();
 
     try {
@@ -671,6 +735,12 @@ class AudioProvider with ChangeNotifier {
     // the Future never resolves, which would permanently block the finally block above.
     if (_sessions.containsKey(session.id)) {
       unawaited(session.player.play());
+      // Trigger mode: only restart countdown when a new audio source starts.
+      if (_timerMode == TimerMode.trigger &&
+          _timerDuration != null &&
+          willLoadNewAudio) {
+        _resetAndStartCountdown();
+      }
     }
   }
 
@@ -682,9 +752,23 @@ class AudioProvider with ChangeNotifier {
       await session.player.pause();
     } else {
       if (session.state.processingState == ProcessingState.completed) {
+        final replayingSameSource = session.loadedPath == session.currentTrackPath;
         await _prepareAndPlay(session, nextPath: session.currentTrackPath);
+        // Trigger mode: replaying the same completed track from playlist
+        // should also start/restart countdown.
+        if (replayingSameSource &&
+            _timerMode == TimerMode.trigger &&
+            _timerDuration != null) {
+          _resetAndStartCountdown();
+        }
       } else {
-        await session.player.play();
+        // Keep this non-blocking: with handleAudioSessionActivation=false on
+        // some Android devices play() Future may never complete.
+        unawaited(session.player.play());
+        // Trigger mode: tapping play in playlist should also start/restart countdown.
+        if (_timerMode == TimerMode.trigger && _timerDuration != null) {
+          _resetAndStartCountdown();
+        }
       }
     }
   }
@@ -769,6 +853,128 @@ class AudioProvider with ChangeNotifier {
     for (final id in ids) {
       await removeSession(id);
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Timer management
+  // ---------------------------------------------------------------------------
+
+  /// Configure timer mode and duration. Does NOT start the countdown yet
+  /// (for manual mode the user taps "start"; for trigger mode the countdown
+  /// starts automatically when any audio begins playing).
+  void configureTimer(TimerMode mode, Duration duration) {
+    _cancelTimerInternal();
+    _timerMode = mode;
+    _timerDuration = duration;
+    _timerRemaining = duration;
+    _timerActive = false;
+    notifyListeners();
+  }
+
+  /// Start the countdown immediately (used for manual mode and internally).
+  void startCountdown() {
+    if (_timerDuration == null || _timerActive) return;
+    _timerActive = true;
+    _timerRemaining = _timerDuration;
+    _countdownTimer?.cancel();
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (_timerRemaining == null) return;
+      final next = _timerRemaining! - const Duration(seconds: 1);
+      if (next <= Duration.zero) {
+        _timerRemaining = Duration.zero;
+        notifyListeners();
+        _onTimerExpired();
+      } else {
+        _timerRemaining = next;
+        notifyListeners();
+      }
+    });
+    notifyListeners();
+  }
+
+  /// Cancel a running or configured timer.
+  void cancelTimer() {
+    _cancelTimerInternal();
+    _timerMode = null;
+    _timerDuration = null;
+    _timerRemaining = null;
+    _pausedByTimerPaths.clear();
+    notifyListeners();
+  }
+
+  void _cancelTimerInternal() {
+    _countdownTimer?.cancel();
+    _countdownTimer = null;
+    _autoResumeTimer?.cancel();
+    _autoResumeTimer = null;
+    _timerActive = false;
+  }
+
+  void _onTimerExpired() {
+    _timerActive = false;
+    _countdownTimer?.cancel();
+    _countdownTimer = null;
+
+    // Remember which sessions were playing so we can resume them
+    _pausedByTimerPaths.clear();
+    for (final s in _sessions.values) {
+      if (s.state.playing) {
+        _pausedByTimerPaths.add(s.currentTrackPath);
+      }
+    }
+
+    // Pause all
+    for (final s in _sessions.values) {
+      s.player.pause();
+    }
+
+    notifyListeners();
+
+    // Schedule auto-resume at the configured clock time if enabled
+    if (_autoResumeEnabled) {
+      _autoResumeTimer?.cancel();
+      final delay = _delayUntilClockTime(_autoResumeHour, _autoResumeMinute);
+      _autoResumeTimer = Timer(delay, _onAutoResume);
+    }
+  }
+
+  void _onAutoResume() {
+    _autoResumeTimer = null;
+    // Resume sessions that were paused by the timer
+    for (final s in _sessions.values) {
+      if (_pausedByTimerPaths.contains(s.currentTrackPath)) {
+        s.player.play();
+      }
+    }
+    _pausedByTimerPaths.clear();
+    notifyListeners();
+  }
+
+  void setAutoResume(bool enabled, int hour, int minute) {
+    _autoResumeEnabled = enabled;
+    _autoResumeHour = hour;
+    _autoResumeMinute = minute;
+    notifyListeners();
+    unawaited(_saveTimerSettings());
+  }
+
+  /// Returns the Duration until the next occurrence of [hour]:[minute].
+  /// If that time has already passed today, schedules for tomorrow.
+  Duration _delayUntilClockTime(int hour, int minute) {
+    final now = DateTime.now();
+    var target = DateTime(now.year, now.month, now.day, hour, minute);
+    if (!target.isAfter(now)) {
+      target = target.add(const Duration(days: 1));
+    }
+    return target.difference(now);
+  }
+
+  /// Restart countdown from _timerDuration (cancels any in-progress timer).
+  void _resetAndStartCountdown() {
+    _countdownTimer?.cancel();
+    _countdownTimer = null;
+    _timerActive = false;
+    startCountdown();
   }
 
   /// Reorder sessions in the display list.
