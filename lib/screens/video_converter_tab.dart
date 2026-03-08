@@ -1,4 +1,4 @@
-import 'dart:io';
+﻿import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:ffmpeg_kit_flutter_new_audio/ffmpeg_kit.dart';
@@ -11,6 +11,7 @@ import 'package:path/path.dart' as path;
 import 'package:provider/provider.dart';
 
 import '../providers/audio_provider.dart';
+import '../widgets/top_glass_panel.dart';
 import '../widgets/top_page_header.dart';
 
 class VideoConverterTab extends StatefulWidget {
@@ -165,113 +166,122 @@ class _VideoConverterTabState extends State<VideoConverterTab> {
     final selectedBitrate = provider.converterBitrate;
 
     return Scaffold(
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const TopPageHeader(
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(16, 90, 16, 104),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _PathPickerCard(
+                    icon: Icons.video_library_rounded,
+                    title: '视频源文件',
+                    placeholder: '点击选择需要转换的视频文件',
+                    value: _selectedVideoPath,
+                    onTap: _isConverting ? null : _pickVideoFile,
+                  ),
+                  const SizedBox(height: 12),
+                  _PathPickerCard(
+                    icon: Icons.create_new_folder_rounded,
+                    title: '输出目录',
+                    placeholder: '点击选择音频保存位置',
+                    value: _outputDirectoryPath,
+                    onTap: _isConverting ? null : _pickOutputDirectory,
+                  ),
+                  const SizedBox(height: 12),
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(14),
+                      child: Row(
+                        children: [
+                          Icon(Icons.tune_rounded, color: Theme.of(context).colorScheme.primary),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              '当前参数：${selectedFormat.toUpperCase()} · ${selectedFormat == 'wav' || selectedFormat == 'flac' ? '格式自动编码' : selectedBitrate}',
+                              style: Theme.of(context).textTheme.bodyMedium,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  if (_isConverting || _progress > 0) ...[
+                    TweenAnimationBuilder<double>(
+                      duration: const Duration(milliseconds: 250),
+                      curve: Curves.easeInOut,
+                      tween: Tween<double>(
+                        begin: 0,
+                        end: _isConverting && _videoDurationMs == 0 ? 0 : _progress,
+                      ),
+                      builder: (context, value, _) => LinearProgressIndicator(
+                        value: _isConverting && _videoDurationMs == 0 ? null : value,
+                        minHeight: 8,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                  ],
+                  if (_statusMessage.isNotEmpty)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: Theme.of(context).colorScheme.outlineVariant,
+                        ),
+                      ),
+                      child: Text(
+                        _statusMessage,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: _isConverting
+                              ? Theme.of(context).colorScheme.primary
+                              : Theme.of(context).colorScheme.onSurfaceVariant,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: 16),
+                  if (_isConverting)
+                    FilledButton.icon(
+                      onPressed: _cancelConversion,
+                      icon: const Icon(Icons.cancel_rounded),
+                      label: const Text('取消转换'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: Theme.of(context).colorScheme.error,
+                        foregroundColor: Theme.of(context).colorScheme.onError,
+                      ),
+                    )
+                  else
+                    FilledButton.icon(
+                      onPressed:
+                          _selectedVideoPath != null && _outputDirectoryPath != null
+                          ? () => _startConversion(provider)
+                          : null,
+                      icon: const Icon(Icons.transform_rounded),
+                      label: const Text('开始转换'),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          Align(
+            alignment: Alignment.topCenter,
+            child: TopGlassPanel(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+              child: TopPageHeader(
                 icon: Icons.sync_rounded,
                 title: '视频转音频',
                 padding: EdgeInsets.zero,
-                bottomSpacing: 16,
               ),
-              _PathPickerCard(
-                icon: Icons.video_library_rounded,
-                title: '视频源文件',
-                placeholder: '点击选择需要转换的视频文件',
-                value: _selectedVideoPath,
-                onTap: _isConverting ? null : _pickVideoFile,
-              ),
-              const SizedBox(height: 12),
-              _PathPickerCard(
-                icon: Icons.create_new_folder_rounded,
-                title: '输出目录',
-                placeholder: '点击选择音频保存位置',
-                value: _outputDirectoryPath,
-                onTap: _isConverting ? null : _pickOutputDirectory,
-              ),
-              const SizedBox(height: 12),
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Row(
-                    children: [
-                      Icon(Icons.tune_rounded, color: Theme.of(context).colorScheme.primary),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          '当前参数：${selectedFormat.toUpperCase()} · ${selectedFormat == 'wav' || selectedFormat == 'flac' ? '格式自动编码' : selectedBitrate}',
-                          style: Theme.of(context).textTheme.bodyMedium,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              if (_isConverting || _progress > 0) ...[
-                TweenAnimationBuilder<double>(
-                  duration: const Duration(milliseconds: 250),
-                  curve: Curves.easeInOut,
-                  tween: Tween<double>(
-                    begin: 0,
-                    end: _isConverting && _videoDurationMs == 0 ? 0 : _progress,
-                  ),
-                  builder: (context, value, _) => LinearProgressIndicator(
-                    value: _isConverting && _videoDurationMs == 0 ? null : value,
-                    minHeight: 8,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                ),
-                const SizedBox(height: 14),
-              ],
-              if (_statusMessage.isNotEmpty)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: Theme.of(context).colorScheme.outlineVariant,
-                    ),
-                  ),
-                  child: Text(
-                    _statusMessage,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: _isConverting
-                          ? Theme.of(context).colorScheme.primary
-                          : Theme.of(context).colorScheme.onSurfaceVariant,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 14,
-                    ),
-                  ),
-                ),
-              const SizedBox(height: 16),
-              if (_isConverting)
-                FilledButton.icon(
-                  onPressed: _cancelConversion,
-                  icon: const Icon(Icons.cancel_rounded),
-                  label: const Text('取消转换'),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: Theme.of(context).colorScheme.error,
-                    foregroundColor: Theme.of(context).colorScheme.onError,
-                  ),
-                )
-              else
-                FilledButton.icon(
-                  onPressed:
-                      _selectedVideoPath != null && _outputDirectoryPath != null
-                      ? () => _startConversion(provider)
-                      : null,
-                  icon: const Icon(Icons.transform_rounded),
-                  label: const Text('开始转换'),
-                ),
-            ],
+            ),
           ),
-        ),
+        ],
       ),
     );
   }

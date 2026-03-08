@@ -1,3 +1,5 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -65,7 +67,7 @@ class _MainScreenState extends State<MainScreen> {
 
   Widget _buildAnimatedBody({required bool isDesktop}) {
     final cs = Theme.of(context).colorScheme;
-    final radius = BorderRadius.circular(isDesktop ? 28 : 24);
+    final radius = BorderRadius.circular(isDesktop ? 28 : 0);
 
     return Stack(
       fit: StackFit.expand,
@@ -92,36 +94,44 @@ class _MainScreenState extends State<MainScreen> {
                     alignment: Alignment.topCenter,
                     child: ConstrainedBox(
                       constraints: BoxConstraints(
-                        maxWidth: isDesktop ? 980 : 760,
+                        maxWidth: isDesktop ? 980 : double.infinity,
                       ),
                       child: Padding(
                         padding: EdgeInsets.fromLTRB(
-                          isDesktop ? 24 : 10,
-                          isDesktop ? 22 : 10,
-                          isDesktop ? 24 : 10,
-                          isDesktop ? 22 : 8,
+                          isDesktop ? 24 : 0,
+                          isDesktop ? 22 : 0,
+                          isDesktop ? 24 : 0,
+                          isDesktop ? 22 : 0,
                         ),
                         child: DecoratedBox(
                           decoration: BoxDecoration(
                             color: cs.surface.withValues(
-                              alpha: isDesktop ? 0.9 : 0.97,
+                              alpha: isDesktop ? 0.9 : 1,
                             ),
                             borderRadius: radius,
-                            border: Border.all(
-                              color: cs.outlineVariant.withValues(alpha: 0.75),
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: cs.shadow.withValues(alpha: 0.08),
-                                blurRadius: 20,
-                                offset: const Offset(0, 8),
-                              ),
-                            ],
+                            border: isDesktop
+                                ? Border.all(
+                                    color: cs.outlineVariant.withValues(
+                                      alpha: 0.75,
+                                    ),
+                                  )
+                                : null,
+                            boxShadow: isDesktop
+                                ? [
+                                    BoxShadow(
+                                      color: cs.shadow.withValues(alpha: 0.08),
+                                      blurRadius: 20,
+                                      offset: const Offset(0, 8),
+                                    ),
+                                  ]
+                                : null,
                           ),
-                          child: ClipRRect(
-                            borderRadius: radius,
-                            child: _pages[index],
-                          ),
+                          child: isDesktop
+                              ? ClipRRect(
+                                  borderRadius: radius,
+                                  child: _pages[index],
+                                )
+                              : _pages[index],
                         ),
                       ),
                     ),
@@ -145,7 +155,10 @@ class _MainScreenState extends State<MainScreen> {
         final dialogHeight = size.height - 32;
 
         return Dialog(
-          insetPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 16),
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 10,
+            vertical: 16,
+          ),
           clipBehavior: Clip.antiAlias,
           child: SizedBox(
             width: dialogWidth,
@@ -215,71 +228,111 @@ class _MainScreenState extends State<MainScreen> {
   ) {
     final cs = Theme.of(context).colorScheme;
 
-    if (_currentIndex == 1) {
-      return Semantics(
-        button: true,
-        label: 'Open timer settings',
-        child: FloatingActionButton.extended(
-          onPressed: () => _openTimerSettingsPage(context),
-          backgroundColor: cs.primaryContainer,
-          foregroundColor: cs.onPrimaryContainer,
-          icon: const Icon(Icons.timer_rounded),
-          label: Text(_timerFabLabel(audioProvider)),
+    return Semantics(
+      button: true,
+      label: 'Open timer settings',
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: cs.primaryContainer.withValues(alpha: 0.65),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: FloatingActionButton.extended(
+              onPressed: () => _openTimerSettingsPage(context),
+              backgroundColor: Colors.transparent,
+              elevation: 0,
+              highlightElevation: 0,
+              focusElevation: 0,
+              hoverElevation: 0,
+              foregroundColor: cs.onPrimaryContainer,
+              icon: const Icon(Icons.timer_rounded),
+              label: Text(_timerFabLabel(audioProvider)),
+            ),
+          ),
         ),
-      );
-    }
-
-    if (_currentIndex == 0) {
-      return Semantics(
-        button: true,
-        label: 'Open video to audio converter',
-        child: FloatingActionButton.extended(
-          onPressed: () => _openVideoConverterFloating(context),
-          backgroundColor: cs.secondaryContainer,
-          foregroundColor: cs.onSecondaryContainer,
-          icon: const Icon(Icons.video_library_rounded),
-          label: const Text('Convert Video'),
-        ),
-      );
-    }
-
-    return null;
+      ),
+    );
   }
 
   Widget _buildBottomBar(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final bottomInset = MediaQuery.paddingOf(context).bottom;
+    const capsuleRadius = 30.0;
 
-    return SafeArea(
-      top: false,
-      minimum: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.8)),
-          boxShadow: [
-            BoxShadow(
-              color: cs.shadow.withValues(alpha: 0.06),
-              blurRadius: 16,
-              offset: const Offset(0, 8),
-            ),
-          ],
-        ),
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(12, 0, 12, 10 + bottomInset),
         child: ClipRRect(
-          borderRadius: BorderRadius.circular(24),
-          child: NavigationBar(
-            height: 72,
-            selectedIndex: _currentIndex,
-            labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-            onDestinationSelected: _switchPage,
-            destinations: _destinations
-                .map(
-                  (item) => NavigationDestination(
-                    icon: Icon(item.icon),
-                    selectedIcon: Icon(item.selectedIcon),
-                    label: item.label,
+          borderRadius: BorderRadius.circular(capsuleRadius),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: cs.surface.withValues(alpha: 0.58),
+                borderRadius: BorderRadius.circular(capsuleRadius),
+                border: Border.all(
+                  color: cs.outlineVariant.withValues(alpha: 0.45),
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: cs.shadow.withValues(alpha: 0.14),
+                    blurRadius: 22,
+                    offset: const Offset(0, 8),
                   ),
-                )
-                .toList(),
+                ],
+              ),
+              child: NavigationBarTheme(
+                data: NavigationBarThemeData(
+                  height: 62,
+                  elevation: 0,
+                  backgroundColor: Colors.transparent,
+                  indicatorColor: cs.primary.withValues(alpha: 0.2),
+                  labelTextStyle: WidgetStateProperty.resolveWith((states) {
+                    final weight = states.contains(WidgetState.selected)
+                        ? FontWeight.w700
+                        : FontWeight.w600;
+                    final color = states.contains(WidgetState.selected)
+                        ? cs.onSurface
+                        : cs.onSurfaceVariant;
+                    return TextStyle(
+                      color: color,
+                      fontWeight: weight,
+                      fontSize: states.contains(WidgetState.selected) ? 11 : 10,
+                    );
+                  }),
+                  iconTheme: WidgetStateProperty.resolveWith((states) {
+                    final color = states.contains(WidgetState.selected)
+                        ? cs.onSurface
+                        : cs.onSurfaceVariant;
+                    return IconThemeData(color: color);
+                  }),
+                ),
+                child: MediaQuery.removePadding(
+                  context: context,
+                  removeTop: true,
+                  removeBottom: true,
+                  child: NavigationBar(
+                    selectedIndex: _currentIndex,
+                    labelBehavior:
+                        NavigationDestinationLabelBehavior.alwaysShow,
+                    onDestinationSelected: _switchPage,
+                    destinations: _destinations
+                        .map(
+                          (item) => NavigationDestination(
+                            icon: Icon(item.icon),
+                            selectedIcon: Icon(item.selectedIcon),
+                            label: item.label,
+                          ),
+                        )
+                        .toList(),
+                  ),
+                ),
+              ),
+            ),
           ),
         ),
       ),
@@ -382,6 +435,10 @@ class _MainScreenState extends State<MainScreen> {
     final audioProvider = context.watch<AudioProvider>();
     final width = MediaQuery.sizeOf(context).width;
     final isDesktop = width >= _desktopBreakpoint;
+    final mobileFab = isDesktop
+        ? null
+        : _buildFloatingActionButton(context, audioProvider);
+    final mobileBottomInset = MediaQuery.paddingOf(context).bottom;
 
     return Scaffold(
       extendBody: !isDesktop,
@@ -399,12 +456,16 @@ class _MainScreenState extends State<MainScreen> {
             )
           else
             _buildAnimatedBody(isDesktop: false),
+          if (!isDesktop) _buildBottomBar(context),
         ],
       ),
-      floatingActionButton: isDesktop
+      floatingActionButton: mobileFab == null
           ? null
-          : _buildFloatingActionButton(context, audioProvider),
-      bottomNavigationBar: isDesktop ? null : _buildBottomBar(context),
+          : Padding(
+              padding: EdgeInsets.only(bottom: 68 + mobileBottomInset),
+              child: mobileFab,
+            ),
+      bottomNavigationBar: null,
     );
   }
 }
@@ -467,10 +528,7 @@ class _GlowOrb extends StatelessWidget {
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           gradient: RadialGradient(
-            colors: [
-              color,
-              color.withValues(alpha: 0.0),
-            ],
+            colors: [color, color.withValues(alpha: 0.0)],
           ),
         ),
       ),
@@ -538,10 +596,7 @@ class _DesktopQuickAction extends StatelessWidget {
                   ],
                 ),
               ),
-              Icon(
-                Icons.chevron_right_rounded,
-                color: cs.onSurfaceVariant,
-              ),
+              Icon(Icons.chevron_right_rounded, color: cs.onSurfaceVariant),
             ],
           ),
         ),

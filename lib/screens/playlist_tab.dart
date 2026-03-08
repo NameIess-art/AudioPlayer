@@ -6,6 +6,7 @@ import 'package:path/path.dart' as path;
 import 'package:provider/provider.dart';
 
 import '../providers/audio_provider.dart';
+import '../widgets/top_glass_panel.dart';
 import '../widgets/top_page_header.dart';
 
 class PlaylistTab extends StatelessWidget {
@@ -46,16 +47,42 @@ class PlaylistTab extends StatelessWidget {
     }
   }
 
-  @override
   Widget build(BuildContext context) {
     final provider = context.watch<AudioProvider>();
     final sessions = provider.activeSessions;
     final playingCount = sessions.where((s) => s.state.playing).length;
 
-    return SafeArea(
-      child: Column(
-        children: [
-          TopPageHeader(
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: sessions.isEmpty
+              ? const Padding(
+                  padding: EdgeInsets.only(top: 140),
+                  child: _SessionsEmptyState(),
+                )
+              : ListView.builder(
+                  padding: const EdgeInsets.fromLTRB(16, 140, 16, 104),
+                  itemCount: sessions.length,
+                  addAutomaticKeepAlives: false,
+                  addRepaintBoundaries: true,
+                  itemBuilder: (context, index) {
+                    final session = sessions[index];
+                    return _SessionCard(
+                      key: ValueKey(session.id),
+                      session: session,
+                      provider: provider,
+                    );
+                  },
+                ),
+        ),
+        Align(
+          alignment: Alignment.topCenter,
+          child: TopGlassPanel(
+            padding: EdgeInsets.zero,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TopPageHeader(
             icon: Icons.graphic_eq_rounded,
             title: '播放会话',
             trailing: Row(
@@ -112,26 +139,12 @@ class PlaylistTab extends StatelessWidget {
               ],
             ),
           ),
-          Expanded(
-            child: sessions.isEmpty
-                ? const _SessionsEmptyState()
-                : ListView.builder(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                    itemCount: sessions.length,
-                    addAutomaticKeepAlives: false,
-                    addRepaintBoundaries: true,
-                    itemBuilder: (context, index) {
-                      final session = sessions[index];
-                      return _SessionCard(
-                        key: ValueKey(session.id),
-                        session: session,
-                        provider: provider,
-                      );
-                    },
-                  ),
+                ],
+              ],
+            ),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
@@ -485,7 +498,7 @@ class _SessionCardState extends State<_SessionCard> {
                     children: [
                       Text(
                         displayName,
-                        maxLines: 2,
+                        maxLines: 3,
                         overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.titleSmall?.copyWith(
                           fontWeight: FontWeight.w800,

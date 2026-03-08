@@ -1,4 +1,4 @@
-import 'dart:io';
+﻿import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as path;
@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 
 import '../providers/audio_provider.dart';
 import '../theme/theme_provider.dart';
+import '../widgets/top_glass_panel.dart';
 import '../widgets/top_page_header.dart';
 
 class SettingsTab extends StatelessWidget {
@@ -41,16 +42,12 @@ class SettingsTab extends StatelessWidget {
     final bitrate = audioProvider.converterBitrate;
     final bitrateEnabled = format != 'wav' && format != 'flac';
 
-    return SafeArea(
-      child: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 26),
-        children: [
-          const TopPageHeader(
-            icon: Icons.tune_rounded,
-            title: '设置',
-            padding: EdgeInsets.zero,
-            bottomSpacing: 18,
-          ),
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(16, 90, 16, 104),
+            children: [
           Card(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
@@ -195,14 +192,29 @@ class SettingsTab extends StatelessWidget {
               ),
             ),
           ),
-        ],
-      ),
+            ],
+          ),
+        ),
+        const Align(
+          alignment: Alignment.topCenter,
+          child: TopGlassPanel(
+            padding: EdgeInsets.zero,
+            child: TopPageHeader(
+              icon: Icons.tune_rounded,
+              title: '设置',
+              padding: EdgeInsets.zero,
+              bottomSpacing: 10,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
 
 class _SelectField extends StatelessWidget {
   const _SelectField({
+    super.key,
     required this.label,
     required this.value,
     required this.items,

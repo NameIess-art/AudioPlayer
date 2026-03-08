@@ -1,7 +1,8 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/audio_provider.dart';
+import '../widgets/top_glass_panel.dart';
 import '../widgets/top_page_header.dart';
 
 class TimerTab extends StatefulWidget {
@@ -61,17 +62,12 @@ class _TimerTabState extends State<TimerTab> {
         provider.timerRemaining != null &&
         provider.timerRemaining! > Duration.zero;
 
-    return SafeArea(
-      child: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-        children: [
-          if (widget.showHeader)
-            const TopPageHeader(
-              icon: Icons.timer_rounded,
-              title: '计时器',
-              padding: EdgeInsets.zero,
-              bottomSpacing: 16,
-            ),
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: ListView(
+            padding: EdgeInsets.fromLTRB(16, widget.showHeader ? 90 : 16, 16, 104),
+            children: [
           if (timerActive || timerExpired || timerWaitingTrigger) ...[
             _CountdownCard(
               provider: provider,
@@ -237,9 +233,23 @@ class _TimerTabState extends State<TimerTab> {
               ),
             ),
         ],
+      ), // closes ListView
+    ), // closes Positioned.fill
+    if (widget.showHeader)
+      Align(
+        alignment: Alignment.topCenter,
+        child: TopGlassPanel(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+          child: TopPageHeader(
+            icon: Icons.timer_rounded,
+            title: '定时器',
+            padding: EdgeInsets.zero,
+          ),
+        ),
       ),
-    );
-  }
+  ],
+); // closes Stack
+  } // closes build method
 }
 
 class _CountdownCard extends StatelessWidget {

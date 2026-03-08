@@ -11,7 +11,9 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/audio_provider.dart';
+import '../widgets/top_glass_panel.dart';
 import '../widgets/top_page_header.dart';
+import 'video_converter_tab.dart';
 
 class LibraryTab extends StatefulWidget {
   const LibraryTab({super.key});
@@ -387,12 +389,59 @@ class _LibraryTabState extends State<LibraryTab> {
     final provider = context.watch<AudioProvider>();
     final tree = provider.buildLibraryTree();
     final cs = Theme.of(context).colorScheme;
-    final topFolderCount = tree.whereType<FolderNode>().length;
 
-    return SafeArea(
-      child: Column(
-        children: [
-          TopPageHeader(
+    int countLeafFolders(List<LibraryNode> nodes) {
+      int count = 0;
+      for (final node in nodes) {
+        if (node is FolderNode) {
+          final hasSubFolders = node.children.any((c) => c is FolderNode);
+          if (!hasSubFolders) {
+            count++;
+          } else {
+            count += countLeafFolders(node.children);
+          }
+        }
+      }
+      return count;
+    }
+
+    final leafFolderCount = countLeafFolders(tree);
+
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: tree.isEmpty
+              ? Padding(
+                  padding: const EdgeInsets.only(top: 140),
+                  child: _LibraryEmptyState(
+                    onAddFolder: _addFolder,
+                    onAddFiles: _addFiles,
+                  ),
+                )
+              : ListView.builder(
+                  padding: const EdgeInsets.fromLTRB(16, 140, 16, 104),
+                  itemCount: tree.length + 1,
+                  itemBuilder: (context, index) {
+                    if (index == tree.length) {
+                      return Divider(
+                          height: 1, color: cs.outlineVariant.withValues(alpha: 0.7));
+                    }
+                    final node = tree[index];
+                    return _LibraryTreeItem(
+                      key: ValueKey(node.path),
+                      node: node,
+                    );
+                  },
+                ),
+        ),
+        Align(
+          alignment: Alignment.topCenter,
+          child: TopGlassPanel(
+            padding: EdgeInsets.zero,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TopPageHeader(
             icon: Icons.library_music_rounded,
             title: '音乐库',
             trailing: SizedBox(
@@ -427,6 +476,22 @@ class _LibraryTabState extends State<LibraryTab> {
                           onSelected: (value) {
                             if (value == 0) _addFolder();
                             if (value == 1) _addFiles();
+                            if (value == 2) {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (ctx) => Scaffold(
+                                    appBar: AppBar(
+                                      title: const Text('视频转音频'),
+                                      leading: IconButton(
+                                        icon: const Icon(Icons.arrow_back_rounded),
+                                        onPressed: () => Navigator.of(ctx).pop(),
+                                      ),
+                                    ),
+                                    body: const VideoConverterTab(),
+                                  ),
+                                ),
+                              );
+                            }
                           },
                           itemBuilder: (context) => const [
                             PopupMenuItem(
@@ -446,6 +511,17 @@ class _LibraryTabState extends State<LibraryTab> {
                                   Icon(Icons.upload_file_rounded, size: 20),
                                   SizedBox(width: 12),
                                   Text('导入文件'),
+                                ],
+                              ),
+                            ),
+                            PopupMenuDivider(),
+                            PopupMenuItem(
+                              value: 2,
+                              child: Row(
+                                children: [
+                                  Icon(Icons.video_library_rounded, size: 20),
+                                  SizedBox(width: 12),
+                                  Text('视频转音频'),
                                 ],
                               ),
                             ),
@@ -469,36 +545,17 @@ class _LibraryTabState extends State<LibraryTab> {
                 ),
                 _MetricChip(
                   icon: Icons.folder_rounded,
-                  text: '$topFolderCount 个文件夹',
-                ),
-                _MetricChip(
-                  icon: Icons.visibility_rounded,
-                  text: '监听 ${provider.watchedFolders.length} 个',
+                  text: '$leafFolderCount 个子文件夹',
                 ),
               ],
             ),
           ),
-          Expanded(
-            child: tree.isEmpty
-                ? _LibraryEmptyState(
-                    onAddFolder: _addFolder,
-                    onAddFiles: _addFiles,
-                  )
-                : ListView.builder(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                    itemCount: tree.length,
-                    itemBuilder: (context, index) {
-                      final node = tree[index];
-                      return _LibraryTreeItem(
-                        key: ValueKey(node.path),
-                        node: node,
-                      );
-                    },
-                  ),
+                ],
+              ],
+            ),
           ),
-          Divider(height: 1, color: cs.outlineVariant.withValues(alpha: 0.7)),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
@@ -703,7 +760,7 @@ class _FolderNodeWidget extends StatelessWidget {
         ),
         title: Text(
           folder.name,
-          maxLines: 2,
+          maxLines: 3,
           overflow: TextOverflow.ellipsis,
           style: const TextStyle(fontWeight: FontWeight.w800),
         ),
@@ -779,7 +836,7 @@ class _TrackNodeWidget extends StatelessWidget {
         ),
         title: Text(
           track.displayName,
-          maxLines: 2,
+          maxLines: 3,
           overflow: TextOverflow.ellipsis,
         ),
         trailing: SizedBox(
