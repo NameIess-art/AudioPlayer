@@ -1,20 +1,25 @@
-import 'package:flutter/material.dart';
-import 'package:just_audio/just_audio.dart';
-import 'package:provider/provider.dart';
-import 'package:path/path.dart' as path;
 import 'dart:math';
 
+import 'package:flutter/material.dart';
+import 'package:just_audio/just_audio.dart';
+import 'package:path/path.dart' as path;
+import 'package:provider/provider.dart';
+
 import '../providers/audio_provider.dart';
+import '../widgets/top_page_header.dart';
 
 class PlaylistTab extends StatelessWidget {
   const PlaylistTab({super.key});
 
-  Future<void> _confirmClearAll(BuildContext context, AudioProvider provider) async {
+  Future<void> _confirmClearAll(
+    BuildContext context,
+    AudioProvider provider,
+  ) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('移除所有任务'),
-        content: const Text('确认要停止并移除所有播放任务吗？'),
+        title: const Text('清空全部会话'),
+        content: const Text('停止并移除所有正在运行的播放会话？'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
@@ -26,7 +31,7 @@ class PlaylistTab extends StatelessWidget {
               backgroundColor: Theme.of(ctx).colorScheme.error,
               foregroundColor: Theme.of(ctx).colorScheme.onError,
             ),
-            child: const Text('全部移除'),
+            child: const Text('清空'),
           ),
         ],
       ),
@@ -36,7 +41,7 @@ class PlaylistTab extends StatelessWidget {
       if (context.mounted) {
         ScaffoldMessenger.of(context)
           ..clearSnackBars()
-          ..showSnackBar(const SnackBar(content: Text('已清空所有播放任务')));
+          ..showSnackBar(const SnackBar(content: Text('已清空全部会话。')));
       }
     }
   }
@@ -45,46 +50,71 @@ class PlaylistTab extends StatelessWidget {
   Widget build(BuildContext context) {
     final provider = context.watch<AudioProvider>();
     final sessions = provider.activeSessions;
+    final playingCount = sessions.where((s) => s.state.playing).length;
 
     return SafeArea(
       child: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Row(
+          TopPageHeader(
+            icon: Icons.graphic_eq_rounded,
+            title: '播放会话',
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.dashboard_rounded, size: 28),
-                const SizedBox(width: 12),
-                Text(
-                  '播放列表',
-                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold),
-                ),
-                const Spacer(),
-                IconButton.filledTonal(
-                  onPressed: sessions.isEmpty ? null : () {
-                    provider.pauseAllSessions();
-                    ScaffoldMessenger.of(context)
-                      ..clearSnackBars()
-                      ..showSnackBar(const SnackBar(content: Text('已暂停全部播放')));
-                  },
-                  icon: const Icon(Icons.pause_circle_outline_rounded),
-                  tooltip: '全部暂停',
+                Semantics(
+                  button: true,
+                  label: '暂停全部会话',
+                  child: IconButton.filledTonal(
+                    onPressed: sessions.isEmpty
+                        ? null
+                        : () {
+                            provider.pauseAllSessions();
+                            ScaffoldMessenger.of(context)
+                              ..clearSnackBars()
+                              ..showSnackBar(
+                                const SnackBar(content: Text('已暂停全部会话。')),
+                              );
+                          },
+                    icon: const Icon(Icons.pause_circle_outline_rounded),
+                    tooltip: '全部暂停',
+                  ),
                 ),
                 const SizedBox(width: 8),
-                IconButton.filledTonal(
-                  onPressed: sessions.isEmpty ? null : () => _confirmClearAll(context, provider),
-                  icon: const Icon(Icons.delete_sweep_rounded),
-                  tooltip: '清空列表',
+                Semantics(
+                  button: true,
+                  label: '清空全部会话',
+                  child: IconButton.filledTonal(
+                    onPressed: sessions.isEmpty
+                        ? null
+                        : () => _confirmClearAll(context, provider),
+                    icon: const Icon(Icons.delete_sweep_rounded),
+                    tooltip: '清空全部',
+                  ),
+                ),
+              ],
+            ),
+            bottomSpacing: 10,
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: [
+                _MetricChip(
+                  icon: Icons.queue_music_rounded,
+                  text: '${sessions.length} 个会话',
+                ),
+                _MetricChip(
+                  icon: Icons.play_circle_rounded,
+                  text: '播放中 $playingCount 个',
                 ),
               ],
             ),
           ),
-
           Expanded(
             child: sessions.isEmpty
-                ? const Center(
-                    child: Text('当前没有任务在播放\n请从文件管理去添加音乐', textAlign: TextAlign.center),
-                  )
+                ? const _SessionsEmptyState()
                 : ListView.builder(
                     padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
                     itemCount: sessions.length,
@@ -96,7 +126,6 @@ class PlaylistTab extends StatelessWidget {
                         key: ValueKey(session.id),
                         session: session,
                         provider: provider,
-                        index: index,
                       );
                     },
                   ),
@@ -107,21 +136,100 @@ class PlaylistTab extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Session Card (stateful – supports collapsed/expanded)
-// ─────────────────────────────────────────────────────────────────────────────
+class _MetricChip extends StatelessWidget {
+  const _MetricChip({required this.icon, required this.text});
+
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHighest.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: cs.outlineVariant),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: cs.onSurfaceVariant),
+          const SizedBox(width: 6),
+          Text(
+            text,
+            style: Theme.of(
+              context,
+            ).textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w700),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SessionsEmptyState extends StatelessWidget {
+  const _SessionsEmptyState();
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        child: Card(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(18, 20, 18, 18),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 58,
+                  height: 58,
+                  decoration: BoxDecoration(
+                    color: cs.primaryContainer,
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                  child: Icon(
+                    Icons.queue_music_rounded,
+                    size: 30,
+                    color: cs.onPrimaryContainer,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  '当前没有活跃会话',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '请先到音乐库播放音频，再创建并发会话。',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: cs.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 class _SessionCard extends StatefulWidget {
   const _SessionCard({
     required super.key,
     required this.session,
     required this.provider,
-    required this.index,
   });
 
   final PlaybackSession session;
   final AudioProvider provider;
-  final int index;
 
   @override
   State<_SessionCard> createState() => _SessionCardState();
@@ -133,12 +241,66 @@ class _SessionCardState extends State<_SessionCard> {
   PlaybackSession get session => widget.session;
   AudioProvider get provider => widget.provider;
 
+  bool _isSingleLoop(SessionLoopMode mode) => mode == SessionLoopMode.single;
+
+  bool _isShuffleLoop(SessionLoopMode mode) {
+    return mode == SessionLoopMode.crossRandom ||
+        mode == SessionLoopMode.folderRandom;
+  }
+
+  bool _isCrossFolderLoop(SessionLoopMode mode) {
+    return mode == SessionLoopMode.crossRandom ||
+        mode == SessionLoopMode.crossSequential;
+  }
+
+  String _loopModeSummary(SessionLoopMode mode) {
+    if (_isSingleLoop(mode)) return '单曲循环';
+    final scope = _isCrossFolderLoop(mode) ? '跨文件夹' : '当前文件夹';
+    final order = _isShuffleLoop(mode) ? '随机' : '顺序';
+    return '$order · $scope';
+  }
+
+  Widget _buildLoopModeButton({
+    required BuildContext context,
+    required IconData icon,
+    required String tooltip,
+    required bool active,
+    required bool disabled,
+    required VoidCallback? onPressed,
+  }) {
+    final cs = Theme.of(context).colorScheme;
+    return IconButton(
+      onPressed: disabled ? null : onPressed,
+      tooltip: tooltip,
+      style: IconButton.styleFrom(
+        visualDensity: VisualDensity.compact,
+        backgroundColor: active
+            ? cs.primaryContainer
+            : cs.surfaceContainerHighest.withValues(alpha: 0.9),
+        side: BorderSide(
+          color: active ? cs.primary.withValues(alpha: 0.5) : cs.outlineVariant,
+        ),
+      ),
+      icon: Icon(
+        icon,
+        size: 18,
+        color: disabled
+            ? cs.onSurface.withValues(alpha: 0.35)
+            : active
+            ? cs.primary
+            : cs.onSurfaceVariant,
+      ),
+    );
+  }
+
   void _showTrackSwitcher(BuildContext context) {
     final siblings = provider.tracksInSameGroup(session.currentTrackPath);
     if (siblings.isEmpty) {
       ScaffoldMessenger.of(context)
         ..clearSnackBars()
-        ..showSnackBar(const SnackBar(content: Text('该文件夹内没有其他曲目')));
+        ..showSnackBar(
+          const SnackBar(content: Text('该文件夹没有可切换的其他音频。')),
+        );
       return;
     }
 
@@ -171,12 +333,17 @@ class _SessionCardState extends State<_SessionCard> {
                   padding: const EdgeInsets.symmetric(horizontal: 20),
                   child: Row(
                     children: [
-                      Icon(Icons.folder_open_rounded, color: Theme.of(ctx).colorScheme.primary),
+                      Icon(
+                        Icons.folder_open_rounded,
+                        color: Theme.of(ctx).colorScheme.primary,
+                      ),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          '切换曲目',
-                          style: Theme.of(ctx).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                          '切换音频',
+                          style: Theme.of(
+                            ctx,
+                          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
                         ),
                       ),
                     ],
@@ -193,22 +360,29 @@ class _SessionCardState extends State<_SessionCard> {
                       final isCurrent = track.path == session.currentTrackPath;
                       return ListTile(
                         leading: Icon(
-                          isCurrent ? Icons.volume_up_rounded : Icons.music_note_rounded,
-                          color: isCurrent ? Theme.of(ctx).colorScheme.primary : null,
+                          isCurrent
+                              ? Icons.volume_up_rounded
+                              : Icons.music_note_rounded,
+                          color: isCurrent
+                              ? Theme.of(ctx).colorScheme.primary
+                              : null,
                         ),
                         title: Text(
                           track.displayName,
-                          maxLines: 3,
-                          softWrap: true,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
                           style: isCurrent
                               ? TextStyle(
-                                  fontWeight: FontWeight.bold,
+                                  fontWeight: FontWeight.w800,
                                   color: Theme.of(ctx).colorScheme.primary,
                                 )
                               : null,
                         ),
                         trailing: isCurrent
-                            ? Icon(Icons.check_rounded, color: Theme.of(ctx).colorScheme.primary)
+                            ? Icon(
+                                Icons.check_rounded,
+                                color: Theme.of(ctx).colorScheme.primary,
+                              )
                             : null,
                         onTap: () {
                           Navigator.of(ctx).pop();
@@ -230,27 +404,38 @@ class _SessionCardState extends State<_SessionCard> {
 
   @override
   Widget build(BuildContext context) {
-    final track = provider.trackByPath(session.currentTrackPath);
-    final displayName = track?.displayName ?? path.basenameWithoutExtension(session.currentTrackPath);
-    final folderName = (track != null && !track.isSingle) ? track.groupTitle : null;
-    final isPlaying = session.state.playing;
-    final hasSiblings = provider.tracksInSameGroup(session.currentTrackPath).length > 1;
     final cs = Theme.of(context).colorScheme;
+    final track = provider.trackByPath(session.currentTrackPath);
+    final displayName =
+        track?.displayName ??
+        path.basenameWithoutExtension(session.currentTrackPath);
+    final folderName = (track != null && !track.isSingle)
+        ? track.groupTitle
+        : null;
+    final isPlaying = session.state.playing;
+    final hasSiblings =
+        provider.tracksInSameGroup(session.currentTrackPath).length > 1;
+    final singleLoopEnabled = _isSingleLoop(session.loopMode);
+    final shuffleEnabled = _isShuffleLoop(session.loopMode);
+    final crossFolderEnabled = _isCrossFolderLoop(session.loopMode);
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
         color: Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
-          color: isPlaying ? cs.primary.withValues(alpha: 0.5) : cs.outlineVariant,
-          width: isPlaying ? 2 : 1,
+          color: isPlaying
+              ? cs.primary.withValues(alpha: 0.65)
+              : cs.outlineVariant,
+          width: isPlaying ? 1.6 : 1,
         ),
         boxShadow: [
           if (isPlaying)
             BoxShadow(
               color: cs.primary.withValues(alpha: 0.08),
-              blurRadius: 10,
+              blurRadius: 12,
               offset: const Offset(0, 4),
             ),
         ],
@@ -258,14 +443,17 @@ class _SessionCardState extends State<_SessionCard> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ── Folder tag (only when track belongs to a named folder) ──────
           if (folderName != null)
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
               child: Row(
                 children: [
-                  Icon(Icons.folder_rounded, size: 13, color: cs.onSurfaceVariant),
-                  const SizedBox(width: 4),
+                  Icon(
+                    Icons.folder_rounded,
+                    size: 14,
+                    color: cs.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 5),
                   Expanded(
                     child: Text(
                       folderName,
@@ -274,38 +462,52 @@ class _SessionCardState extends State<_SessionCard> {
                       style: Theme.of(context).textTheme.labelSmall?.copyWith(
                         color: cs.onSurfaceVariant,
                         letterSpacing: 0.2,
+                        fontWeight: FontWeight.w700,
                       ),
                     ),
                   ),
                 ],
               ),
             ),
-
-          // ── Main row: title + controls ──────────────────────────────────
           Padding(
-            padding: EdgeInsets.fromLTRB(16, folderName != null ? 4 : 12, 6, _expanded ? 4 : 10),
+            padding: EdgeInsets.fromLTRB(
+              14,
+              folderName != null ? 6 : 12,
+              8,
+              _expanded ? 4 : 10,
+            ),
             child: Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Track name
                 Expanded(
-                  child: Text(
-                    displayName,
-                    maxLines: 3,
-                    softWrap: true,
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.bold,
-                      color: isPlaying ? cs.primary : null,
-                    ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        displayName,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w800,
+                          color: isPlaying ? cs.primary : null,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _loopModeSummary(session.loopMode),
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: cs.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-
-                // Controls (loading spinner or buttons)
                 if (session.isLoading)
                   const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 12),
+                    padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                     child: SizedBox(
-                      width: 22, height: 22,
+                      width: 22,
+                      height: 22,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     ),
                   )
@@ -315,10 +517,14 @@ class _SessionCardState extends State<_SessionCard> {
                     tooltip: '上一首',
                     onPressed: () => provider.seekSessionToPrev(session.id),
                     visualDensity: VisualDensity.compact,
-                    padding: EdgeInsets.zero,
                   ),
                   IconButton.filled(
-                    icon: Icon(isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded, size: 20),
+                    icon: Icon(
+                      isPlaying
+                          ? Icons.pause_rounded
+                          : Icons.play_arrow_rounded,
+                      size: 20,
+                    ),
                     tooltip: isPlaying ? '暂停' : '播放',
                     onPressed: () => provider.toggleSessionPlayPause(session.id),
                     visualDensity: VisualDensity.compact,
@@ -328,11 +534,8 @@ class _SessionCardState extends State<_SessionCard> {
                     tooltip: '下一首',
                     onPressed: () => provider.seekSessionToNext(session.id),
                     visualDensity: VisualDensity.compact,
-                    padding: EdgeInsets.zero,
                   ),
                 ],
-
-                // Expand / Collapse toggle
                 IconButton(
                   icon: AnimatedRotation(
                     turns: _expanded ? 0.5 : 0,
@@ -343,106 +546,118 @@ class _SessionCardState extends State<_SessionCard> {
                   onPressed: () => setState(() => _expanded = !_expanded),
                   visualDensity: VisualDensity.compact,
                 ),
-
-                // Close
                 IconButton(
                   icon: const Icon(Icons.close_rounded, size: 20),
-                  tooltip: '结束任务',
+                  tooltip: '结束会话',
                   onPressed: () => provider.removeSession(session.id),
                   visualDensity: VisualDensity.compact,
-                  padding: EdgeInsets.zero,
                 ),
               ],
             ),
           ),
-
-          // ── Expanded detail section ─────────────────────────────────────
-          AnimatedCrossFade(
+          AnimatedSize(
             duration: const Duration(milliseconds: 220),
-            crossFadeState: _expanded ? CrossFadeState.showSecond : CrossFadeState.showFirst,
-            firstChild: const SizedBox.shrink(),
-            secondChild: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Divider(height: 12, thickness: 0.5),
-
-                  // Progress bar
-                  _ProgressBar(player: session.player, sessionId: session.id, provider: provider),
-                  const SizedBox(height: 8),
-
-                  // Bottom row: Loop dropdown + optional switch track + Volume
-                  Row(
-                    children: [
-                      Expanded(
-                        flex: 2,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10),
-                          decoration: BoxDecoration(
-                            color: cs.surfaceContainerHighest,
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: DropdownButtonHideUnderline(
-                            child: DropdownButton<SessionLoopMode>(
-                              value: session.loopMode,
-                              isExpanded: true,
-                              icon: const Icon(Icons.arrow_drop_down_rounded),
-                              style: Theme.of(context).textTheme.bodySmall,
-                              items: SessionLoopMode.values.map((mode) {
-                                return DropdownMenuItem(
-                                  value: mode,
-                                  child: Text(mode.label, maxLines: 1, overflow: TextOverflow.ellipsis),
-                                );
-                              }).toList(),
-                              onChanged: (val) {
-                                if (val != null) provider.setSessionLoopMode(session.id, val);
-                              },
+            curve: Curves.easeOutCubic,
+            child: _expanded
+                ? Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Divider(height: 12, color: cs.outlineVariant),
+                        _ProgressBar(
+                          player: session.player,
+                          sessionId: session.id,
+                          provider: provider,
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            _buildLoopModeButton(
+                              context: context,
+                              icon: Icons.repeat_one_rounded,
+                              tooltip: '单曲循环',
+                              active: singleLoopEnabled,
+                              disabled: false,
+                              onPressed: () =>
+                                  provider.toggleSessionSingleLoop(session.id),
                             ),
-                          ),
+                            const SizedBox(width: 6),
+                            _buildLoopModeButton(
+                              context: context,
+                              icon: shuffleEnabled
+                                  ? Icons.shuffle_rounded
+                                  : Icons.repeat_rounded,
+                              tooltip: shuffleEnabled ? '随机播放' : '顺序播放',
+                              active: shuffleEnabled,
+                              disabled: singleLoopEnabled,
+                              onPressed: () =>
+                                  provider.toggleSessionShuffle(session.id),
+                            ),
+                            const SizedBox(width: 6),
+                            _buildLoopModeButton(
+                              context: context,
+                              icon: crossFolderEnabled
+                                  ? Icons.folder_copy_rounded
+                                  : Icons.folder_rounded,
+                              tooltip: crossFolderEnabled
+                                  ? '跨文件夹播放'
+                                  : '仅当前文件夹',
+                              active: crossFolderEnabled,
+                              disabled: singleLoopEnabled,
+                              onPressed: () => provider.toggleSessionCrossFolder(
+                                session.id,
+                              ),
+                            ),
+                            const Spacer(),
+                            if (hasSiblings)
+                              IconButton.outlined(
+                                icon: const Icon(
+                                  Icons.queue_music_rounded,
+                                  size: 18,
+                                ),
+                                tooltip: '切换音频',
+                                visualDensity: VisualDensity.compact,
+                                onPressed: () => _showTrackSwitcher(context),
+                              ),
+                          ],
                         ),
-                      ),
-                      const SizedBox(width: 6),
-                      if (hasSiblings)
-                        IconButton.outlined(
-                          icon: const Icon(Icons.queue_music_rounded, size: 18),
-                          tooltip: '切换曲目',
-                          visualDensity: VisualDensity.compact,
-                          onPressed: () => _showTrackSwitcher(context),
-                        ),
-                      const SizedBox(width: 4),
-                      Expanded(
-                        flex: 3,
-                        child: Row(
+                        const SizedBox(height: 8),
+                        Row(
                           children: [
                             Icon(
-                              session.volume == 0 ? Icons.volume_off_rounded : Icons.volume_down_rounded,
+                              session.volume == 0
+                                  ? Icons.volume_off_rounded
+                                  : Icons.volume_down_rounded,
                               size: 18,
                               color: cs.onSurfaceVariant,
                             ),
                             Expanded(
                               child: SliderTheme(
                                 data: SliderTheme.of(context).copyWith(
-                                  trackHeight: 2,
-                                  thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
-                                  overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
+                                  trackHeight: 2.5,
+                                  thumbShape: const RoundSliderThumbShape(
+                                    enabledThumbRadius: 5,
+                                  ),
+                                  overlayShape: const RoundSliderOverlayShape(
+                                    overlayRadius: 10,
+                                  ),
                                 ),
                                 child: Slider(
                                   value: session.volume,
                                   min: 0,
                                   max: 1,
-                                  onChanged: (val) => provider.setSessionVolume(session.id, val),
+                                  onChanged: (val) =>
+                                      provider.setSessionVolume(session.id, val),
                                 ),
                               ),
                             ),
                           ],
                         ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
+                      ],
+                    ),
+                  )
+                : const SizedBox.shrink(),
           ),
         ],
       ),
@@ -450,12 +665,12 @@ class _SessionCardState extends State<_SessionCard> {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Progress bar widget
-// ─────────────────────────────────────────────────────────────────────────────
-
 class _ProgressBar extends StatelessWidget {
-  const _ProgressBar({required this.player, required this.sessionId, required this.provider});
+  const _ProgressBar({
+    required this.player,
+    required this.sessionId,
+    required this.provider,
+  });
 
   final AudioPlayer player;
   final String sessionId;
@@ -478,27 +693,46 @@ class _ProgressBar extends StatelessWidget {
                 SliderTheme(
                   data: SliderTheme.of(context).copyWith(
                     trackHeight: 3,
-                    thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
-                    overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
+                    thumbShape: const RoundSliderThumbShape(
+                      enabledThumbRadius: 5,
+                    ),
+                    overlayShape: const RoundSliderOverlayShape(
+                      overlayRadius: 10,
+                    ),
                   ),
                   child: Slider(
                     min: 0,
                     max: max(1, duration.inMilliseconds).toDouble(),
-                    value: position.inMilliseconds.clamp(0, max(1, duration.inMilliseconds)).toDouble(),
+                    value: position.inMilliseconds
+                        .clamp(0, max(1, duration.inMilliseconds))
+                        .toDouble(),
                     onChanged: (value) {
                       if (duration.inMilliseconds > 0) {
-                        provider.seekSession(sessionId, Duration(milliseconds: value.round()));
+                        provider.seekSession(
+                          sessionId,
+                          Duration(milliseconds: value.round()),
+                        );
                       }
                     },
                   ),
                 ),
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text(_fmt(position), style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: 10)),
-                      Text(_fmt(duration), style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: 10)),
+                      Text(
+                        _fmt(position),
+                        style: Theme.of(
+                          context,
+                        ).textTheme.bodySmall?.copyWith(fontSize: 11),
+                      ),
+                      Text(
+                        _fmt(duration),
+                        style: Theme.of(
+                          context,
+                        ).textTheme.bodySmall?.copyWith(fontSize: 11),
+                      ),
                     ],
                   ),
                 ),
@@ -511,8 +745,12 @@ class _ProgressBar extends StatelessWidget {
   }
 
   String _fmt(Duration d) {
+    final h = d.inHours;
     final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
     final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    if (h > 0) {
+      return '${h.toString().padLeft(2, '0')}:$m:$s';
+    }
     return '$m:$s';
   }
 }

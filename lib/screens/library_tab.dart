@@ -11,7 +11,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/audio_provider.dart';
-import 'package:auto_size_text/auto_size_text.dart';
+import '../widgets/top_page_header.dart';
 
 class LibraryTab extends StatefulWidget {
   const LibraryTab({super.key});
@@ -21,20 +21,18 @@ class LibraryTab extends StatefulWidget {
 }
 
 class _LibraryTabState extends State<LibraryTab> {
-  static const MethodChannel _fileCacheChannel = MethodChannel('music_player/file_cache');
+  static const MethodChannel _fileCacheChannel = MethodChannel(
+    'music_player/file_cache',
+  );
 
   @override
   void initState() {
     super.initState();
-    // Auto-rescan watched folders once the first frame has rendered so the
-    // provider is fully available via context.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _refreshWatchedFolders(silent: true);
     });
   }
 
-  /// Re-scan all watched folders and add any new audio files silently.
-  /// When [silent] is true no snackbar is shown if there are no new files.
   Future<void> _refreshWatchedFolders({bool silent = false}) async {
     final provider = context.read<AudioProvider>();
     final watchedFolders = provider.watchedFolders;
@@ -42,25 +40,30 @@ class _LibraryTabState extends State<LibraryTab> {
 
     final permissionGranted = await _ensureReadPermission();
     if (!permissionGranted) {
-      if (!silent) _showSnack('需要读取权限才能扫描文件夹。');
+      if (!silent) _showSnack('需要存储权限才能扫描文件夹。');
       return;
     }
 
     if (!mounted) return;
     provider.setScanning(true);
-    int totalAdded = 0;
+    var totalAdded = 0;
     try {
       for (final folderPath in watchedFolders) {
         final nativeTracks = await _scanFolderViaNative(folderPath);
         if (nativeTracks != null) {
-          final toAdd = nativeTracks.map((t) => MusicTrack(
-            path: t.path,
-            displayName: t.displayName ?? path.basenameWithoutExtension(t.path),
-            groupKey: t.groupKey,
-            groupTitle: t.groupTitle,
-            groupSubtitle: t.groupSubtitle,
-            isSingle: t.isSingle,
-          )).toList();
+          final toAdd = nativeTracks
+              .map(
+                (t) => MusicTrack(
+                  path: t.path,
+                  displayName:
+                      t.displayName ?? path.basenameWithoutExtension(t.path),
+                  groupKey: t.groupKey,
+                  groupTitle: t.groupTitle,
+                  groupSubtitle: t.groupSubtitle,
+                  isSingle: t.isSingle,
+                ),
+              )
+              .toList();
           final before = provider.library.length;
           provider.addTracks(toAdd);
           totalAdded += provider.library.length - before;
@@ -72,7 +75,11 @@ class _LibraryTabState extends State<LibraryTab> {
       if (mounted) {
         provider.setScanning(false);
         if (!silent || totalAdded > 0) {
-          _showSnack(totalAdded > 0 ? '刷新完毕：新增了 $totalAdded 首歌曲。' : '已是最新，没有新文件。');
+          _showSnack(
+            totalAdded > 0
+                ? '刷新完成：新增 $totalAdded 首音频。'
+                : '未发现新音频。',
+          );
         }
       }
     }
@@ -81,30 +88,37 @@ class _LibraryTabState extends State<LibraryTab> {
   Future<void> _addFolder() async {
     final permissionGranted = await _ensureReadPermission();
     if (!permissionGranted) {
-      _showSnack('需要读取权限才能导入音频文件。');
+      _showSnack('需要存储权限才能导入音频。');
       return;
     }
 
-    final folderPath = await FilePicker.platform.getDirectoryPath(dialogTitle: '选择音乐文件夹');
+    final folderPath = await FilePicker.platform.getDirectoryPath(
+      dialogTitle: '选择音乐文件夹',
+    );
     if (folderPath == null || folderPath.isEmpty) return;
 
     if (!mounted) return;
     context.read<AudioProvider>().setScanning(true);
 
     final provider = context.read<AudioProvider>();
-    int added = 0;
+    var added = 0;
 
     try {
       final nativeTracks = await _scanFolderViaNative(folderPath);
       if (nativeTracks != null) {
-        final toAdd = nativeTracks.map((t) => MusicTrack(
-          path: t.path,
-          displayName: t.displayName ?? path.basenameWithoutExtension(t.path),
-          groupKey: t.groupKey,
-          groupTitle: t.groupTitle,
-          groupSubtitle: t.groupSubtitle,
-          isSingle: t.isSingle,
-        )).toList();
+        final toAdd = nativeTracks
+            .map(
+              (t) => MusicTrack(
+                path: t.path,
+                displayName:
+                    t.displayName ?? path.basenameWithoutExtension(t.path),
+                groupKey: t.groupKey,
+                groupTitle: t.groupTitle,
+                groupSubtitle: t.groupSubtitle,
+                isSingle: t.isSingle,
+              ),
+            )
+            .toList();
 
         final beforeCount = provider.library.length;
         provider.addTracks(toAdd);
@@ -115,9 +129,8 @@ class _LibraryTabState extends State<LibraryTab> {
     } finally {
       if (mounted) {
         provider.setScanning(false);
-        _showSnack('扫完了：新增了 $added 首歌曲。');
-        // Register this folder as watched so it is auto-rescanned on next startup.
         provider.addWatchedFolder(folderPath);
+        _showSnack('导入完成：新增 $added 首音频。');
       }
     }
   }
@@ -125,7 +138,7 @@ class _LibraryTabState extends State<LibraryTab> {
   Future<void> _addFiles() async {
     final permissionGranted = await _ensureReadPermission();
     if (!permissionGranted) {
-      _showSnack('需要读取权限才能导入音频文件。');
+      _showSnack('需要存储权限才能导入音频。');
       return;
     }
 
@@ -133,7 +146,7 @@ class _LibraryTabState extends State<LibraryTab> {
       allowMultiple: true,
       withReadStream: true,
       type: FileType.any,
-      dialogTitle: '选择音乐文件',
+      dialogTitle: '选择音频文件',
     );
     if (result == null) return;
 
@@ -145,7 +158,10 @@ class _LibraryTabState extends State<LibraryTab> {
       for (var i = 0; i < result.files.length; i++) {
         final file = result.files[i];
         final rawPath = file.path;
-        final needsCopy = rawPath == null || rawPath.isEmpty || rawPath.startsWith('content://');
+        final needsCopy =
+            rawPath == null ||
+            rawPath.isEmpty ||
+            rawPath.startsWith('content://');
 
         if (!needsCopy) {
           resolvedPaths.add(path.normalize(rawPath));
@@ -158,21 +174,26 @@ class _LibraryTabState extends State<LibraryTab> {
         }
       }
 
-      final candidates = resolvedPaths.where(_isSupportedAudioFile).map((p) => MusicTrack(
-        path: p,
-        displayName: path.basenameWithoutExtension(p),
-        groupKey: '__single_files__',
-        groupTitle: '单独添加的文件',
-        groupSubtitle: '手动选择的文件',
-        isSingle: true,
-      )).toList();
+      final candidates = resolvedPaths
+          .where(_isSupportedAudioFile)
+          .map(
+            (p) => MusicTrack(
+              path: p,
+              displayName: path.basenameWithoutExtension(p),
+              groupKey: '__single_files__',
+              groupTitle: '已导入文件',
+              groupSubtitle: '手动选择的文件',
+              isSingle: true,
+            ),
+          )
+          .toList();
 
       if (mounted) {
         final provider = context.read<AudioProvider>();
         final beforeCount = provider.library.length;
         provider.addTracks(candidates);
         final added = provider.library.length - beforeCount;
-        _showSnack('导入完成：新增了 $added 首歌曲。');
+        _showSnack('导入完成：新增 $added 首音频。');
       }
     } finally {
       if (mounted) {
@@ -187,11 +208,16 @@ class _LibraryTabState extends State<LibraryTab> {
 
     if (stream != null) {
       try {
-        final cacheDir = Directory(path.join(Directory.systemTemp.path, 'music_player_imports'));
+        final cacheDir = Directory(
+          path.join(Directory.systemTemp.path, 'music_player_imports'),
+        );
         if (!await cacheDir.exists()) await cacheDir.create(recursive: true);
 
         final extension = path.extension(file.name);
-        final outPath = path.join(cacheDir.path, '${DateTime.now().microsecondsSinceEpoch}_$index${extension.isEmpty ? '.bin' : extension}');
+        final outPath = path.join(
+          cacheDir.path,
+          '${DateTime.now().microsecondsSinceEpoch}_$index${extension.isEmpty ? '.bin' : extension}',
+        );
 
         final sink = File(outPath).openWrite();
         await stream.pipe(sink);
@@ -200,9 +226,15 @@ class _LibraryTabState extends State<LibraryTab> {
       } catch (_) {}
     }
 
-    if (Platform.isAndroid && identifier != null && identifier.startsWith('content://')) {
+    if (Platform.isAndroid &&
+        identifier != null &&
+        identifier.startsWith('content://')) {
       try {
-        return await _fileCacheChannel.invokeMethod<String>('cacheFromUri', {'uri': identifier, 'name': file.name, 'index': index});
+        return await _fileCacheChannel.invokeMethod<String>('cacheFromUri', {
+          'uri': identifier,
+          'name': file.name,
+          'index': index,
+        });
       } catch (_) {}
     }
     return null;
@@ -211,7 +243,10 @@ class _LibraryTabState extends State<LibraryTab> {
   Future<List<_ScannedTrack>?> _scanFolderViaNative(String folderPath) async {
     if (!Platform.isAndroid) return null;
     try {
-      final data = await _fileCacheChannel.invokeMethod<List<dynamic>>('scanFolder', {'folder': folderPath});
+      final data = await _fileCacheChannel.invokeMethod<List<dynamic>>(
+        'scanFolder',
+        {'folder': folderPath},
+      );
       if (data == null) return null;
 
       final scanned = <_ScannedTrack>[];
@@ -219,26 +254,40 @@ class _LibraryTabState extends State<LibraryTab> {
         if (item is! Map) continue;
         final map = item.cast<Object?, Object?>();
         final scannedPath = map['path']?.toString().trim();
-        if (scannedPath == null || scannedPath.isEmpty || !_isSupportedAudioFile(scannedPath)) continue;
+        if (scannedPath == null ||
+            scannedPath.isEmpty ||
+            !_isSupportedAudioFile(scannedPath)) {
+          continue;
+        }
 
         final nativeGroupKey = map['groupKey']?.toString().trim();
         final nativeGroupTitle = map['groupTitle']?.toString().trim();
         final nativeGroupSubtitle = map['groupSubtitle']?.toString().trim();
 
-        final groupKey = (nativeGroupKey?.isNotEmpty ?? false) ? nativeGroupKey! : path.dirname(scannedPath);
-        final groupTitle = (nativeGroupTitle?.isNotEmpty ?? false) ? nativeGroupTitle! : path.basename(groupKey);
-        final groupSubtitle = (nativeGroupSubtitle?.isNotEmpty ?? false) ? nativeGroupSubtitle! : groupKey;
+        final groupKey = (nativeGroupKey?.isNotEmpty ?? false)
+            ? nativeGroupKey!
+            : path.dirname(scannedPath);
+        final groupTitle = (nativeGroupTitle?.isNotEmpty ?? false)
+            ? nativeGroupTitle!
+            : path.basename(groupKey);
+        final groupSubtitle = (nativeGroupSubtitle?.isNotEmpty ?? false)
+            ? nativeGroupSubtitle!
+            : groupKey;
         final displayName = map['title']?.toString().trim();
-        final resolvedPath = scannedPath.startsWith('content://') ? scannedPath : path.normalize(scannedPath);
+        final resolvedPath = scannedPath.startsWith('content://')
+            ? scannedPath
+            : path.normalize(scannedPath);
 
-        scanned.add(_ScannedTrack(
-          path: resolvedPath,
-          groupKey: groupKey,
-          groupTitle: groupTitle,
-          groupSubtitle: groupSubtitle,
-          isSingle: false,
-          displayName: displayName?.isEmpty ?? true ? null : displayName,
-        ));
+        scanned.add(
+          _ScannedTrack(
+            path: resolvedPath,
+            groupKey: groupKey,
+            groupTitle: groupTitle,
+            groupSubtitle: groupSubtitle,
+            isSingle: false,
+            displayName: displayName?.isEmpty ?? true ? null : displayName,
+          ),
+        );
       }
       return scanned;
     } catch (_) {
@@ -246,7 +295,10 @@ class _LibraryTabState extends State<LibraryTab> {
     }
   }
 
-  Future<int> _importFolderIncrementally(String folderPath, AudioProvider provider) async {
+  Future<int> _importFolderIncrementally(
+    String folderPath,
+    AudioProvider provider,
+  ) async {
     final folder = Directory(folderPath);
     if (!await folder.exists()) return 0;
 
@@ -280,14 +332,16 @@ class _LibraryTabState extends State<LibraryTab> {
         final parentFolder = path.dirname(absolutePath);
         final folderName = path.basename(parentFolder);
 
-        batch.add(MusicTrack(
-          path: absolutePath,
-          displayName: path.basenameWithoutExtension(absolutePath),
-          groupKey: parentFolder,
-          groupTitle: folderName.isEmpty ? parentFolder : folderName,
-          groupSubtitle: parentFolder,
-          isSingle: false,
-        ));
+        batch.add(
+          MusicTrack(
+            path: absolutePath,
+            displayName: path.basenameWithoutExtension(absolutePath),
+            groupKey: parentFolder,
+            groupTitle: folderName.isEmpty ? parentFolder : folderName,
+            groupSubtitle: parentFolder,
+            isSingle: false,
+          ),
+        );
         added++;
 
         if (batch.length >= batchSize) {
@@ -302,7 +356,10 @@ class _LibraryTabState extends State<LibraryTab> {
   }
 
   bool _isSupportedAudioFile(String filePath) {
-    if (filePath.toLowerCase().endsWith('.flac') || filePath.toLowerCase().endsWith('.wav')) return true;
+    if (filePath.toLowerCase().endsWith('.flac') ||
+        filePath.toLowerCase().endsWith('.wav')) {
+      return true;
+    }
     final mimeType = lookupMimeType(filePath);
     if (mimeType == null) return true;
     return mimeType.startsWith('audio/') || mimeType == 'application/ogg';
@@ -313,7 +370,9 @@ class _LibraryTabState extends State<LibraryTab> {
     final manageStatus = await Permission.manageExternalStorage.request();
     if (manageStatus.isGranted) return true;
     final statuses = await [Permission.audio, Permission.storage].request();
-    return statuses.values.any((status) => status.isGranted || status.isLimited);
+    return statuses.values.any(
+      (status) => status.isGranted || status.isLimited,
+    );
   }
 
   void _showSnack(String message) {
@@ -323,107 +382,153 @@ class _LibraryTabState extends State<LibraryTab> {
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 
-
-
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<AudioProvider>();
+    final tree = provider.buildLibraryTree();
+    final cs = Theme.of(context).colorScheme;
+    final topFolderCount = tree.whereType<FolderNode>().length;
 
     return SafeArea(
       child: Column(
         children: [
+          TopPageHeader(
+            icon: Icons.library_music_rounded,
+            title: '音乐库',
+            trailing: SizedBox(
+              width: 112,
+              height: 44,
+              child: provider.isScanning
+                  ? const Align(
+                      alignment: Alignment.centerRight,
+                      child: SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2.2),
+                      ),
+                    )
+                  : Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        Semantics(
+                          button: true,
+                          label: '刷新监听文件夹',
+                          child: IconButton(
+                            icon: const Icon(Icons.refresh_rounded),
+                            tooltip: '刷新监听文件夹',
+                            onPressed: provider.watchedFolders.isEmpty
+                                ? null
+                                : () => _refreshWatchedFolders(),
+                          ),
+                        ),
+                        PopupMenuButton<int>(
+                          icon: const Icon(Icons.add_circle_outline_rounded),
+                          tooltip: '导入音频',
+                          onSelected: (value) {
+                            if (value == 0) _addFolder();
+                            if (value == 1) _addFiles();
+                          },
+                          itemBuilder: (context) => const [
+                            PopupMenuItem(
+                              value: 0,
+                              child: Row(
+                                children: [
+                                  Icon(Icons.create_new_folder_rounded, size: 20),
+                                  SizedBox(width: 12),
+                                  Text('导入文件夹'),
+                                ],
+                              ),
+                            ),
+                            PopupMenuItem(
+                              value: 1,
+                              child: Row(
+                                children: [
+                                  Icon(Icons.upload_file_rounded, size: 20),
+                                  SizedBox(width: 12),
+                                  Text('导入文件'),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+            ),
+            bottomSpacing: 10,
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+          ),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-            child: Row(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 6,
               children: [
-                const Icon(Icons.library_music_rounded, size: 28),
-                const SizedBox(width: 8),
-                Text(
-                  '我的音频库',
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+                _MetricChip(
+                  icon: Icons.music_note_rounded,
+                  text: '${provider.library.length} 首音频',
                 ),
-                const SizedBox(width: 8),
-                if (provider.library.isNotEmpty)
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.primaryContainer,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      '共 ${provider.library.length} 首',
-                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                            color: Theme.of(context).colorScheme.onPrimaryContainer,
-                            fontWeight: FontWeight.w600,
-                          ),
-                    ),
-                  ),
-                const Spacer(),
-                if (provider.isScanning)
-                  const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2.2),
-                  )
-                else
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.refresh_rounded),
-                        tooltip: '刷新监听文件夹',
-                        onPressed: provider.watchedFolders.isEmpty
-                            ? null
-                            : () => _refreshWatchedFolders(),
-                      ),
-                      PopupMenuButton<int>(
-                        icon: const Icon(Icons.add_circle_outline_rounded),
-                        tooltip: '导入音频',
-                        onSelected: (value) {
-                          if (value == 0) _addFolder();
-                          if (value == 1) _addFiles();
-                        },
-                        itemBuilder: (context) => [
-                          const PopupMenuItem(
-                            value: 0,
-                            child: Row(
-                              children: [
-                                Icon(Icons.create_new_folder_rounded, size: 20),
-                                SizedBox(width: 12),
-                                Text('导入文件夹'),
-                              ],
-                            ),
-                          ),
-                          const PopupMenuItem(
-                            value: 1,
-                            child: Row(
-                              children: [
-                                Icon(Icons.upload_file_rounded, size: 20),
-                                SizedBox(width: 12),
-                                Text('导入文件'),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
+                _MetricChip(
+                  icon: Icons.folder_rounded,
+                  text: '$topFolderCount 个文件夹',
+                ),
+                _MetricChip(
+                  icon: Icons.visibility_rounded,
+                  text: '监听 ${provider.watchedFolders.length} 个',
+                ),
               ],
             ),
           ),
           Expanded(
-            child: provider.library.isEmpty
-                ? const Center(
-                    child: Text('没有音乐文件，点击上方按钮导入', textAlign: TextAlign.center),
+            child: tree.isEmpty
+                ? _LibraryEmptyState(
+                    onAddFolder: _addFolder,
+                    onAddFiles: _addFiles,
                   )
                 : ListView.builder(
                     padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                    itemCount: provider.buildLibraryTree().length,
+                    itemCount: tree.length,
                     itemBuilder: (context, index) {
-                      final node = provider.buildLibraryTree()[index];
-                      return _LibraryTreeItem(key: ValueKey(node.path), node: node);
+                      final node = tree[index];
+                      return _LibraryTreeItem(
+                        key: ValueKey(node.path),
+                        node: node,
+                      );
                     },
                   ),
+          ),
+          Divider(height: 1, color: cs.outlineVariant.withValues(alpha: 0.7)),
+        ],
+      ),
+    );
+  }
+}
+
+class _MetricChip extends StatelessWidget {
+  const _MetricChip({required this.icon, required this.text});
+
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHighest.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: cs.outlineVariant),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: cs.onSurfaceVariant),
+          const SizedBox(width: 6),
+          Text(
+            text,
+            style: Theme.of(
+              context,
+            ).textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w700),
           ),
         ],
       ),
@@ -431,9 +536,72 @@ class _LibraryTabState extends State<LibraryTab> {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Tree Node Item Widget (Recursive)
-// ─────────────────────────────────────────────────────────────────────────────
+class _LibraryEmptyState extends StatelessWidget {
+  const _LibraryEmptyState({required this.onAddFolder, required this.onAddFiles});
+
+  final VoidCallback onAddFolder;
+  final VoidCallback onAddFiles;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        child: Card(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(18, 20, 18, 18),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 58,
+                  height: 58,
+                  decoration: BoxDecoration(
+                    color: cs.primaryContainer,
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                  child: Icon(
+                    Icons.audio_file_rounded,
+                    size: 30,
+                    color: cs.onPrimaryContainer,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  '还没有音频文件',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '你可以导入文件夹进行递归扫描，或手动选择文件。',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: cs.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                FilledButton.icon(
+                  onPressed: onAddFolder,
+                  icon: const Icon(Icons.create_new_folder_rounded),
+                  label: const Text('导入文件夹'),
+                ),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  onPressed: onAddFiles,
+                  icon: const Icon(Icons.upload_file_rounded),
+                  label: const Text('导入文件'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 class _LibraryTreeItem extends StatelessWidget {
   const _LibraryTreeItem({super.key, required this.node});
@@ -456,12 +624,17 @@ class _FolderNodeWidget extends StatelessWidget {
 
   final FolderNode folder;
 
-  Future<void> _confirmRemoveFolder(BuildContext context, AudioProvider provider) async {
+  Future<void> _confirmRemoveFolder(
+    BuildContext context,
+    AudioProvider provider,
+  ) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('移除文件夹'),
-        content: Text('要从库中移除文件夹\n${folder.name}\n及其所有音频吗？'),
+        content: Text(
+          '要从音乐库移除该文件夹及其所有音频吗？\n\n${folder.name}',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
@@ -482,7 +655,7 @@ class _FolderNodeWidget extends StatelessWidget {
       provider.removeFolderFromLibrary(folder.path);
       ScaffoldMessenger.of(context)
         ..clearSnackBars()
-        ..showSnackBar(SnackBar(content: Text('已移除 ${folder.name}')));
+        ..showSnackBar(SnackBar(content: Text('已移除：${folder.name}')));
     }
   }
 
@@ -492,64 +665,87 @@ class _FolderNodeWidget extends StatelessWidget {
     provider.spawnSession(tracks.first);
     ScaffoldMessenger.of(context)
       ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text('创建并播放任务：${tracks.first.displayName}')));
+      ..showSnackBar(
+        SnackBar(content: Text('已创建会话：${tracks.first.displayName}')),
+      );
   }
 
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<AudioProvider>();
+    final cs = Theme.of(context).colorScheme;
     final radius = BorderRadius.circular(16);
-    
+
     return Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      elevation: 0,
+      margin: const EdgeInsets.only(bottom: 10),
       clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(
-        side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
+        side: BorderSide(color: cs.outlineVariant),
         borderRadius: radius,
       ),
       child: ExpansionTile(
         shape: RoundedRectangleBorder(borderRadius: radius),
         collapsedShape: RoundedRectangleBorder(borderRadius: radius),
-        childrenPadding: const EdgeInsets.only(left: 16),
+        tilePadding: const EdgeInsets.fromLTRB(12, 4, 8, 4),
+        childrenPadding: const EdgeInsets.only(left: 10, right: 10, bottom: 8),
         leading: Container(
-          padding: const EdgeInsets.all(8),
+          width: 36,
+          height: 36,
           decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.primaryContainer,
-            borderRadius: BorderRadius.circular(8),
+            color: cs.primaryContainer,
+            borderRadius: BorderRadius.circular(10),
           ),
-          child: Icon(Icons.folder_rounded, color: Theme.of(context).colorScheme.onPrimaryContainer),
+          child: Icon(
+            Icons.folder_rounded,
+            color: cs.onPrimaryContainer,
+            size: 20,
+          ),
         ),
-        title: AutoSizeText(
+        title: Text(
           folder.name,
-          maxLines: 4,
-          minFontSize: 9,
-          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-          overflow: TextOverflow.visible,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontWeight: FontWeight.w800),
         ),
         subtitle: Text(
-          '${folder.children.length} 个项目',
-          style: const TextStyle(fontSize: 11),
+          '${folder.children.length} 项',
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: cs.onSurfaceVariant,
+          ),
         ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            IconButton.filledTonal(
-              icon: const Icon(Icons.play_arrow_rounded, size: 20),
-              tooltip: '播放文件夹内所有',
-              visualDensity: VisualDensity.compact,
-              onPressed: () => _playFolder(context, provider),
-            ),
-            const SizedBox(width: 4),
-            IconButton(
-              icon: Icon(Icons.delete_outline_rounded, size: 20, color: Theme.of(context).colorScheme.error),
-              tooltip: '移除文件夹',
-              visualDensity: VisualDensity.compact,
-              onPressed: () => _confirmRemoveFolder(context, provider),
-            ),
-          ],
+        trailing: SizedBox(
+          width: 100,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              IconButton.filledTonal(
+                icon: const Icon(Icons.play_arrow_rounded, size: 20),
+                tooltip: '播放第一首',
+                visualDensity: VisualDensity.compact,
+                onPressed: () => _playFolder(context, provider),
+              ),
+              const SizedBox(width: 4),
+              IconButton(
+                icon: Icon(
+                  Icons.delete_outline_rounded,
+                  size: 20,
+                  color: cs.error,
+                ),
+                tooltip: '移除文件夹',
+                visualDensity: VisualDensity.compact,
+                onPressed: () => _confirmRemoveFolder(context, provider),
+              ),
+            ],
+          ),
         ),
-        children: folder.children.map((childNode) => _LibraryTreeItem(key: ValueKey(childNode.path), node: childNode)).toList(),
+        children: folder.children
+            .map(
+              (childNode) => _LibraryTreeItem(
+                key: ValueKey(childNode.path),
+                node: childNode,
+              ),
+            )
+            .toList(),
       ),
     );
   }
@@ -563,48 +759,67 @@ class _TrackNodeWidget extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<AudioProvider>();
+    final cs = Theme.of(context).colorScheme;
     final track = trackNode.track;
-    final isAlreadyPlaying = provider.activeSessions.any((s) => s.currentTrackPath == track.path);
+    final isAlreadyPlaying = provider.activeSessions.any(
+      (s) => s.currentTrackPath == track.path,
+    );
 
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-      dense: true,
-      leading: Icon(
-        isAlreadyPlaying ? Icons.volume_up_rounded : Icons.music_note_rounded,
-        color: isAlreadyPlaying ? Theme.of(context).colorScheme.primary : null,
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHighest.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(12),
       ),
-      title: Text(
-        track.displayName,
-        maxLines: 3,
-        softWrap: true,
-      ),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          IconButton(
-            icon: Icon(isAlreadyPlaying ? Icons.add_circle_outline_rounded : Icons.play_arrow_rounded),
-            tooltip: isAlreadyPlaying ? '再开一个任务' : '播放',
-            onPressed: () {
-              provider.spawnSession(track);
-              ScaffoldMessenger.of(context)
-                ..clearSnackBars()
-                ..showSnackBar(SnackBar(content: Text('创建并播放任务：${track.displayName}')));
-            },
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 10),
+        leading: Icon(
+          isAlreadyPlaying ? Icons.volume_up_rounded : Icons.music_note_rounded,
+          color: isAlreadyPlaying ? cs.primary : cs.onSurfaceVariant,
+        ),
+        title: Text(
+          track.displayName,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+        trailing: SizedBox(
+          width: 82,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              IconButton(
+                icon: Icon(
+                  isAlreadyPlaying
+                      ? Icons.add_circle_outline_rounded
+                      : Icons.play_arrow_rounded,
+                ),
+                tooltip: isAlreadyPlaying ? '再创建一个会话' : '播放',
+                onPressed: () {
+                  provider.spawnSession(track);
+                  ScaffoldMessenger.of(context)
+                    ..clearSnackBars()
+                    ..showSnackBar(
+                      SnackBar(
+                        content: Text('已创建会话：${track.displayName}'),
+                      ),
+                    );
+                },
+              ),
+              IconButton(
+                icon: const Icon(Icons.delete_outline_rounded, size: 20),
+                tooltip: '移除音频',
+                onPressed: () {
+                  provider.removeTrackFromLibrary(track.path);
+                },
+              ),
+            ],
           ),
-          IconButton(
-            icon: const Icon(Icons.delete_outline_rounded, size: 20),
-            tooltip: '移除音频',
-            onPressed: () {
-              provider.removeTrackFromLibrary(track.path);
-            },
-          ),
-        ],
+        ),
       ),
     );
   }
 }
 
-// Extracted ScannedTrack class goes here
 class _ScannedTrack {
   const _ScannedTrack({
     required this.path,

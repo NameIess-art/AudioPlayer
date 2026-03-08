@@ -4,12 +4,18 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path/path.dart' as path;
 
-
-enum SessionLoopMode { single, random, folder, crossFolder }
+enum SessionLoopMode {
+  single,
+  crossRandom,
+  folderSequential,
+  crossSequential,
+  folderRandom,
+}
 
 enum TimerMode { manual, trigger }
 
@@ -18,12 +24,14 @@ extension SessionLoopModeExtension on SessionLoopMode {
     switch (this) {
       case SessionLoopMode.single:
         return '单曲循环';
-      case SessionLoopMode.random:
-        return '随机循环';
-      case SessionLoopMode.folder:
-        return '文件夹循环';
-      case SessionLoopMode.crossFolder:
-        return '全部循环';
+      case SessionLoopMode.crossRandom:
+        return '随机循环（跨文件夹）';
+      case SessionLoopMode.folderSequential:
+        return '顺序循环（当前文件夹）';
+      case SessionLoopMode.crossSequential:
+        return '顺序循环（跨文件夹）';
+      case SessionLoopMode.folderRandom:
+        return '随机循环（当前文件夹）';
     }
   }
 }
@@ -46,22 +54,22 @@ class MusicTrack {
   final bool isSingle;
 
   Map<String, dynamic> toJson() => {
-        'path': path,
-        'displayName': displayName,
-        'groupKey': groupKey,
-        'groupTitle': groupTitle,
-        'groupSubtitle': groupSubtitle,
-        'isSingle': isSingle,
-      };
+    'path': path,
+    'displayName': displayName,
+    'groupKey': groupKey,
+    'groupTitle': groupTitle,
+    'groupSubtitle': groupSubtitle,
+    'isSingle': isSingle,
+  };
 
   factory MusicTrack.fromJson(Map<String, dynamic> json) => MusicTrack(
-        path: json['path'] as String,
-        displayName: json['displayName'] as String,
-        groupKey: json['groupKey'] as String,
-        groupTitle: json['groupTitle'] as String,
-        groupSubtitle: json['groupSubtitle'] as String,
-        isSingle: json['isSingle'] as bool? ?? false,
-      );
+    path: json['path'] as String,
+    displayName: json['displayName'] as String,
+    groupKey: json['groupKey'] as String,
+    groupTitle: json['groupTitle'] as String,
+    groupSubtitle: json['groupSubtitle'] as String,
+    isSingle: json['isSingle'] as bool? ?? false,
+  );
 }
 
 abstract class LibraryNode {
@@ -75,7 +83,7 @@ class FolderNode extends LibraryNode {
   @override
   final String path;
   final List<LibraryNode> children = [];
-  
+
   FolderNode(this.name, this.path);
 
   /// Recursively get all tracks inside this folder
@@ -108,6 +116,7 @@ class PlaybackSession {
     required this.player,
     required this.currentTrackPath,
     required this.loopMode,
+    required this.nonSingleLoopMode,
     required this.volume,
     required this.createdAt,
     required this.state,
@@ -120,10 +129,13 @@ class PlaybackSession {
   String currentTrackPath;
   String? loadedPath;
   SessionLoopMode loopMode;
+  SessionLoopMode nonSingleLoopMode;
   double volume;
   PlayerState state;
+
   /// True while setAudioSource / play sequence is in progress.
   bool isLoading = false;
+
   /// Monotonically incremented each time we start loading so stale completions
   /// from previous loads do not accidentally trigger auto-advance.
   int loadGeneration = 0;
@@ -143,8 +155,12 @@ const _kGroupOrderKey = 'group_order_v1';
 const _kSessionOrderKey = 'session_order_v1';
 const _kWatchedFoldersKey = 'watched_folders_v1';
 const _kTimerSettingsKey = 'timer_settings_v1';
+const _kConverterSettingsKey = 'converter_settings_v1';
 
 class AudioProvider with ChangeNotifier {
+  static const MethodChannel _powerChannel = MethodChannel(
+    'music_player/power',
+  );
   final List<MusicTrack> _library = [];
   final Map<String, PlaybackSession> _sessions = {};
 
@@ -154,6 +170,24 @@ class AudioProvider with ChangeNotifier {
   final List<String> _sessionOrder = [];
   // Paths of folder roots selected by the user (watched for auto-rescan)
   final List<String> _watchedFolders = [];
+
+  // Video conversion settings (configured from Settings tab).
+  String _converterFormat = 'mp3';
+  String _converterBitrate = '320k';
+
+  static const List<String> converterFormats = [
+    'mp3',
+    'flac',
+    'wav',
+    'aac',
+    'ogg',
+  ];
+  static const List<String> converterBitrates = [
+    '128k',
+    '192k',
+    '256k',
+    '320k',
+  ];
 
   int _sessionSeed = 0;
   bool _isScanning = false;
@@ -165,7 +199,9 @@ class AudioProvider with ChangeNotifier {
   Duration? _timerDuration;
   bool _timerActive = false;
   Duration? _timerRemaining;
+  DateTime? _timerEndsAt;
   Timer? _countdownTimer;
+  bool _keepCpuAwake = false;
 
   // Tracks paused when the timer expired (for auto-resume)
   final List<String> _pausedByTimerPaths = [];
@@ -185,6 +221,8 @@ class AudioProvider with ChangeNotifier {
   int get autoResumeHour => _autoResumeHour;
   int get autoResumeMinute => _autoResumeMinute;
   List<String> get pausedByTimerPaths => List.unmodifiable(_pausedByTimerPaths);
+  String get converterFormat => _converterFormat;
+  String get converterBitrate => _converterBitrate;
 
   List<MusicTrack> get library => _library;
   List<String> get watchedFolders => List.unmodifiable(_watchedFolders);
@@ -213,6 +251,7 @@ class AudioProvider with ChangeNotifier {
   void dispose() {
     _countdownTimer?.cancel();
     _autoResumeTimer?.cancel();
+    unawaited(_setKeepCpuAwake(false));
     for (final session in _sessions.values) {
       session.dispose();
     }
@@ -294,8 +333,10 @@ class AudioProvider with ChangeNotifier {
     await _loadGroupOrder();
     await _loadSessionOrder();
     await _loadWatchedFolders();
+    await _loadConverterSettings();
     await _loadTimerSettings();
     await _loadSessions();
+    _syncKeepCpuAwake();
   }
 
   Future<void> _loadSessions() async {
@@ -313,8 +354,10 @@ class AudioProvider with ChangeNotifier {
         final track = trackByPath(trackPath);
         if (track == null) continue; // Library may have been cleared
 
-        final loopModeIndex = item['loopMode'] as int? ?? SessionLoopMode.folder.index;
-        final loopMode = SessionLoopMode.values[loopModeIndex.clamp(0, SessionLoopMode.values.length - 1)];
+        final loopModeIndex =
+            item['loopMode'] as int? ?? SessionLoopMode.folderSequential.index;
+        final loopMode = SessionLoopMode
+            .values[loopModeIndex.clamp(0, SessionLoopMode.values.length - 1)];
         final volume = (item['volume'] as num?)?.toDouble() ?? 1.0;
 
         // Spawn a paused session (avoids blasting audio on startup).
@@ -327,6 +370,9 @@ class AudioProvider with ChangeNotifier {
           player: player,
           currentTrackPath: track.path,
           loopMode: loopMode,
+          nonSingleLoopMode: loopMode == SessionLoopMode.single
+              ? SessionLoopMode.folderSequential
+              : loopMode,
           volume: volume,
           createdAt: DateTime.now(),
           state: player.playerState,
@@ -344,14 +390,17 @@ class AudioProvider with ChangeNotifier {
           await player.setAudioSource(AudioSource.uri(uri));
           await player.setVolume(volume);
           await player.setLoopMode(
-              loopMode == SessionLoopMode.single ? LoopMode.one : LoopMode.off);
+            loopMode == SessionLoopMode.single ? LoopMode.one : LoopMode.off,
+          );
           session.loadedPath = track.path;
         } catch (_) {}
       }
 
       // Merge persisted session order with restored IDs
       // Keep any IDs from _sessionOrder that were restored, then append new ones
-      final validOrdered = _sessionOrder.where((id) => restoredIds.contains(id)).toList();
+      final validOrdered = _sessionOrder
+          .where((id) => restoredIds.contains(id))
+          .toList();
       for (final id in restoredIds) {
         if (!validOrdered.contains(id)) validOrdered.add(id);
       }
@@ -370,11 +419,17 @@ class AudioProvider with ChangeNotifier {
           .map((id) => _sessions[id])
           .whereType<PlaybackSession>()
           .toList();
-      final encoded = json.encode(ordered.map((s) => {
-        'path': s.currentTrackPath,
-        'loopMode': s.loopMode.index,
-        'volume': s.volume,
-      }).toList());
+      final encoded = json.encode(
+        ordered
+            .map(
+              (s) => {
+                'path': s.currentTrackPath,
+                'loopMode': s.loopMode.index,
+                'volume': s.volume,
+              },
+            )
+            .toList(),
+      );
       await prefs.setString(_kSessionsKey, encoded);
     } catch (_) {}
   }
@@ -429,6 +484,54 @@ class AudioProvider with ChangeNotifier {
     } catch (_) {}
   }
 
+  Future<void> _loadConverterSettings() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_kConverterSettingsKey);
+      if (raw == null || raw.isEmpty) return;
+      final map = json.decode(raw) as Map<String, dynamic>;
+
+      final savedFormat = map['format'] as String?;
+      final savedBitrate = map['bitrate'] as String?;
+
+      if (savedFormat != null && converterFormats.contains(savedFormat)) {
+        _converterFormat = savedFormat;
+      }
+      if (savedBitrate != null && converterBitrates.contains(savedBitrate)) {
+        _converterBitrate = savedBitrate;
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _saveConverterSettings() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final encoded = json.encode({
+        'format': _converterFormat,
+        'bitrate': _converterBitrate,
+      });
+      await prefs.setString(_kConverterSettingsKey, encoded);
+    } catch (_) {}
+  }
+
+  void setConverterSettings({String? format, String? bitrate}) {
+    var changed = false;
+    if (format != null &&
+        converterFormats.contains(format) &&
+        format != _converterFormat) {
+      _converterFormat = format;
+      changed = true;
+    }
+    if (bitrate != null &&
+        converterBitrates.contains(bitrate) &&
+        bitrate != _converterBitrate) {
+      _converterBitrate = bitrate;
+      changed = true;
+    }
+    if (!changed) return;
+    notifyListeners();
+    unawaited(_saveConverterSettings());
+  }
 
   /// Register [folderPath] as a watched folder (idempotent).
   void addWatchedFolder(String folderPath) {
@@ -456,7 +559,9 @@ class AudioProvider with ChangeNotifier {
 
   void addTracks(List<MusicTrack> newTracks) {
     final existingPaths = _library.map((t) => t.path).toSet();
-    final toAdd = newTracks.where((t) => !existingPaths.contains(t.path)).toList();
+    final toAdd = newTracks
+        .where((t) => !existingPaths.contains(t.path))
+        .toList();
     if (toAdd.isNotEmpty) {
       _library.addAll(toAdd);
       // Add new groupKeys to _groupOrder if not already present
@@ -521,10 +626,10 @@ class AudioProvider with ChangeNotifier {
     _saveGroupOrder();
   }
 
-
-
   int getTrackComparator(MusicTrack a, MusicTrack b) {
-    final groupResult = a.groupTitle.toLowerCase().compareTo(b.groupTitle.toLowerCase());
+    final groupResult = a.groupTitle.toLowerCase().compareTo(
+      b.groupTitle.toLowerCase(),
+    );
     if (groupResult != 0) return groupResult;
     return a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase());
   }
@@ -543,7 +648,7 @@ class AudioProvider with ChangeNotifier {
 
       // Start building from the track's folder up to the root
       String dirPath = track.groupKey;
-      
+
       // If we don't have a top-level node for this dir yet, we create the chain
       // First, find if this dir belongs to any root we already know
       String? matchedRoot;
@@ -560,28 +665,33 @@ class AudioProvider with ChangeNotifier {
       // Ensure root exists
       if (!rootNodes.containsKey(matchedRoot)) {
         final rootName = path.basename(matchedRoot);
-        rootNodes[matchedRoot] = FolderNode(rootName.isEmpty ? matchedRoot : rootName, matchedRoot);
+        rootNodes[matchedRoot] = FolderNode(
+          rootName.isEmpty ? matchedRoot : rootName,
+          matchedRoot,
+        );
       }
 
       // Build intermediate folders
       FolderNode currentNode = rootNodes[matchedRoot]!;
-      
+
       if (dirPath != matchedRoot && dirPath.length > matchedRoot.length) {
         // e.g. matchedRoot: /a/b, dirPath: /a/b/c/d
         String relDir = dirPath.substring(matchedRoot.length);
         if (relDir.startsWith(path.separator)) relDir = relDir.substring(1);
-        
+
         final parts = relDir.split(path.separator);
         String currentPath = matchedRoot;
-        
+
         for (final part in parts) {
           if (part.isEmpty) continue;
-          currentPath = currentPath.endsWith(path.separator) 
-              ? currentPath + part 
+          currentPath = currentPath.endsWith(path.separator)
+              ? currentPath + part
               : currentPath + path.separator + part;
-              
+
           // Find or create child folder
-          int childIdx = currentNode.children.indexWhere((c) => c is FolderNode && c.name == part);
+          int childIdx = currentNode.children.indexWhere(
+            (c) => c is FolderNode && c.name == part,
+          );
           if (childIdx == -1) {
             final newFolder = FolderNode(part, currentPath);
             currentNode.children.add(newFolder);
@@ -610,18 +720,22 @@ class AudioProvider with ChangeNotifier {
     }
 
     final topLevel = <LibraryNode>[];
-    
+
     // Convert root map to list and sort them
     final roots = rootNodes.values.toList();
     for (final root in roots) {
       sortFolder(root);
       topLevel.add(root);
     }
-    
-    topLevel.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-    
+
+    topLevel.sort(
+      (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+    );
+
     // Add single files at the end
-    singleFiles.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    singleFiles.sort(
+      (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+    );
     topLevel.addAll(singleFiles);
 
     return topLevel;
@@ -638,9 +752,7 @@ class AudioProvider with ChangeNotifier {
   List<MusicTrack> tracksInSameGroup(String trackPath) {
     final track = trackByPath(trackPath);
     if (track == null) return [];
-    return _library
-        .where((t) => t.groupKey == track.groupKey)
-        .toList()
+    return _library.where((t) => t.groupKey == track.groupKey).toList()
       ..sort(getTrackComparator);
   }
 
@@ -657,7 +769,8 @@ class AudioProvider with ChangeNotifier {
       id: 'session_${++_sessionSeed}',
       player: player,
       currentTrackPath: track.path,
-      loopMode: SessionLoopMode.folder,
+      loopMode: SessionLoopMode.folderSequential,
+      nonSingleLoopMode: SessionLoopMode.folderSequential,
       volume: 1.0,
       createdAt: DateTime.now(),
       state: player.playerState,
@@ -669,7 +782,7 @@ class AudioProvider with ChangeNotifier {
     _bindSessionListeners(session);
     notifyListeners();
 
-    await _prepareAndPlay(session, nextPath: track.path);
+    await _prepareAndPlay(session, nextPath: track.path, autoPlay: false);
     unawaited(_saveSessionState());
     unawaited(_saveSessionOrder());
   }
@@ -680,6 +793,7 @@ class AudioProvider with ChangeNotifier {
 
       final previousProcessing = session.state.processingState;
       session.state = state;
+      _syncKeepCpuAwake();
       notifyListeners();
 
       // Only trigger auto-advance when:
@@ -687,8 +801,9 @@ class AudioProvider with ChangeNotifier {
       //  2. We are NOT currently in the middle of loading a new source, and
       //  3. This listener generation matches the current load generation
       //     (prevents stale completions from an old load from firing).
-      final isNewCompletion = previousProcessing != ProcessingState.completed
-          && state.processingState == ProcessingState.completed;
+      final isNewCompletion =
+          previousProcessing != ProcessingState.completed &&
+          state.processingState == ProcessingState.completed;
 
       if (isNewCompletion && !session.isLoading) {
         _handleSessionCompleted(session.id);
@@ -697,7 +812,11 @@ class AudioProvider with ChangeNotifier {
     session.subscriptions.add(stateSub);
   }
 
-  Future<void> _prepareAndPlay(PlaybackSession session, {required String nextPath}) async {
+  Future<void> _prepareAndPlay(
+    PlaybackSession session, {
+    required String nextPath,
+    bool autoPlay = true,
+  }) async {
     if (!_sessions.containsKey(session.id)) return;
 
     // Bump the generation counter so any stale completion callbacks from the
@@ -709,7 +828,9 @@ class AudioProvider with ChangeNotifier {
 
     try {
       session.currentTrackPath = nextPath;
-      final uri = nextPath.startsWith('content://') ? Uri.parse(nextPath) : Uri.file(nextPath);
+      final uri = nextPath.startsWith('content://')
+          ? Uri.parse(nextPath)
+          : Uri.file(nextPath);
 
       // Always set source when path changes; for same-path replays just seek.
       if (session.loadedPath != nextPath) {
@@ -722,7 +843,10 @@ class AudioProvider with ChangeNotifier {
       await session.player.setVolume(session.volume);
       // Single-track loop is handled by the player natively; others by our listener.
       await session.player.setLoopMode(
-          session.loopMode == SessionLoopMode.single ? LoopMode.one : LoopMode.off);
+        session.loopMode == SessionLoopMode.single
+            ? LoopMode.one
+            : LoopMode.off,
+      );
     } catch (e) {
       debugPrint('AudioProvider._prepareAndPlay error: $e');
     } finally {
@@ -733,14 +857,17 @@ class AudioProvider with ChangeNotifier {
     }
     // Fire play() without awaiting: on Android with handleAudioSessionActivation=false
     // the Future never resolves, which would permanently block the finally block above.
-    if (_sessions.containsKey(session.id)) {
+    if (_sessions.containsKey(session.id) && autoPlay) {
       unawaited(session.player.play());
+      _syncKeepCpuAwake();
       // Trigger mode: only restart countdown when a new audio source starts.
       if (_timerMode == TimerMode.trigger &&
           _timerDuration != null &&
           willLoadNewAudio) {
         _resetAndStartCountdown();
       }
+    } else if (_sessions.containsKey(session.id)) {
+      _syncKeepCpuAwake();
     }
   }
 
@@ -752,7 +879,8 @@ class AudioProvider with ChangeNotifier {
       await session.player.pause();
     } else {
       if (session.state.processingState == ProcessingState.completed) {
-        final replayingSameSource = session.loadedPath == session.currentTrackPath;
+        final replayingSameSource =
+            session.loadedPath == session.currentTrackPath;
         await _prepareAndPlay(session, nextPath: session.currentTrackPath);
         // Trigger mode: replaying the same completed track from playlist
         // should also start/restart countdown.
@@ -779,20 +907,79 @@ class AudioProvider with ChangeNotifier {
       _sessionOrder.remove(sessionId);
       await session.player.stop();
       session.dispose();
+      _syncKeepCpuAwake();
       notifyListeners();
       unawaited(_saveSessionState());
       unawaited(_saveSessionOrder());
     }
   }
 
-  Future<void> setSessionLoopMode(String sessionId, SessionLoopMode mode) async {
+  Future<void> setSessionLoopMode(
+    String sessionId,
+    SessionLoopMode mode,
+  ) async {
     final session = _sessions[sessionId];
     if (session == null) return;
     session.loopMode = mode;
+    if (mode != SessionLoopMode.single) {
+      session.nonSingleLoopMode = mode;
+    }
     await session.player.setLoopMode(
-        mode == SessionLoopMode.single ? LoopMode.one : LoopMode.off);
+      mode == SessionLoopMode.single ? LoopMode.one : LoopMode.off,
+    );
     notifyListeners();
     unawaited(_saveSessionState());
+  }
+
+  bool _isShuffleMode(SessionLoopMode mode) {
+    return mode == SessionLoopMode.crossRandom ||
+        mode == SessionLoopMode.folderRandom;
+  }
+
+  bool _isCrossFolderMode(SessionLoopMode mode) {
+    return mode == SessionLoopMode.crossRandom ||
+        mode == SessionLoopMode.crossSequential;
+  }
+
+  Future<void> toggleSessionSingleLoop(String sessionId) async {
+    final session = _sessions[sessionId];
+    if (session == null) return;
+    if (session.loopMode == SessionLoopMode.single) {
+      await setSessionLoopMode(sessionId, session.nonSingleLoopMode);
+      return;
+    }
+    session.nonSingleLoopMode = session.loopMode;
+    await setSessionLoopMode(sessionId, SessionLoopMode.single);
+  }
+
+  Future<void> toggleSessionShuffle(String sessionId) async {
+    final session = _sessions[sessionId];
+    if (session == null || session.loopMode == SessionLoopMode.single) return;
+    final isCrossFolder = _isCrossFolderMode(session.loopMode);
+    final isShuffle = _isShuffleMode(session.loopMode);
+    final nextMode = isShuffle
+        ? (isCrossFolder
+              ? SessionLoopMode.crossSequential
+              : SessionLoopMode.folderSequential)
+        : (isCrossFolder
+              ? SessionLoopMode.crossRandom
+              : SessionLoopMode.folderRandom);
+    await setSessionLoopMode(sessionId, nextMode);
+  }
+
+  Future<void> toggleSessionCrossFolder(String sessionId) async {
+    final session = _sessions[sessionId];
+    if (session == null || session.loopMode == SessionLoopMode.single) return;
+    final isCrossFolder = _isCrossFolderMode(session.loopMode);
+    final isShuffle = _isShuffleMode(session.loopMode);
+    final nextMode = isCrossFolder
+        ? (isShuffle
+              ? SessionLoopMode.folderRandom
+              : SessionLoopMode.folderSequential)
+        : (isShuffle
+              ? SessionLoopMode.crossRandom
+              : SessionLoopMode.crossSequential);
+    await setSessionLoopMode(sessionId, nextMode);
   }
 
   Future<void> setSessionVolume(String sessionId, double volume) async {
@@ -846,6 +1033,7 @@ class AudioProvider with ChangeNotifier {
 
   Future<void> pauseAllSessions() async {
     await Future.wait(_sessions.values.map((s) => s.player.pause()));
+    _syncKeepCpuAwake();
   }
 
   Future<void> clearAllSessions() async {
@@ -867,7 +1055,9 @@ class AudioProvider with ChangeNotifier {
     _timerMode = mode;
     _timerDuration = duration;
     _timerRemaining = duration;
+    _timerEndsAt = null;
     _timerActive = false;
+    _syncKeepCpuAwake();
     notifyListeners();
   }
 
@@ -876,19 +1066,13 @@ class AudioProvider with ChangeNotifier {
     if (_timerDuration == null || _timerActive) return;
     _timerActive = true;
     _timerRemaining = _timerDuration;
+    _timerEndsAt = DateTime.now().add(_timerDuration!);
     _countdownTimer?.cancel();
-    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (_timerRemaining == null) return;
-      final next = _timerRemaining! - const Duration(seconds: 1);
-      if (next <= Duration.zero) {
-        _timerRemaining = Duration.zero;
-        notifyListeners();
-        _onTimerExpired();
-      } else {
-        _timerRemaining = next;
-        notifyListeners();
-      }
-    });
+    _countdownTimer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => _tickCountdown(),
+    );
+    _syncKeepCpuAwake();
     notifyListeners();
   }
 
@@ -898,22 +1082,27 @@ class AudioProvider with ChangeNotifier {
     _timerMode = null;
     _timerDuration = null;
     _timerRemaining = null;
+    _timerEndsAt = null;
     _pausedByTimerPaths.clear();
+    _syncKeepCpuAwake();
     notifyListeners();
   }
 
   void _cancelTimerInternal() {
     _countdownTimer?.cancel();
     _countdownTimer = null;
+    _timerEndsAt = null;
     _autoResumeTimer?.cancel();
     _autoResumeTimer = null;
     _timerActive = false;
+    _syncKeepCpuAwake();
   }
 
   void _onTimerExpired() {
     _timerActive = false;
     _countdownTimer?.cancel();
     _countdownTimer = null;
+    _timerEndsAt = null;
 
     // Remember which sessions were playing so we can resume them
     _pausedByTimerPaths.clear();
@@ -936,6 +1125,7 @@ class AudioProvider with ChangeNotifier {
       final delay = _delayUntilClockTime(_autoResumeHour, _autoResumeMinute);
       _autoResumeTimer = Timer(delay, _onAutoResume);
     }
+    _syncKeepCpuAwake();
   }
 
   void _onAutoResume() {
@@ -947,6 +1137,7 @@ class AudioProvider with ChangeNotifier {
       }
     }
     _pausedByTimerPaths.clear();
+    _syncKeepCpuAwake();
     notifyListeners();
   }
 
@@ -954,6 +1145,7 @@ class AudioProvider with ChangeNotifier {
     _autoResumeEnabled = enabled;
     _autoResumeHour = hour;
     _autoResumeMinute = minute;
+    _syncKeepCpuAwake();
     notifyListeners();
     unawaited(_saveTimerSettings());
   }
@@ -973,8 +1165,50 @@ class AudioProvider with ChangeNotifier {
   void _resetAndStartCountdown() {
     _countdownTimer?.cancel();
     _countdownTimer = null;
+    _timerEndsAt = null;
     _timerActive = false;
     startCountdown();
+  }
+
+  void _tickCountdown() {
+    if (!_timerActive || _timerEndsAt == null) return;
+    final remaining = _timerEndsAt!.difference(DateTime.now());
+    if (remaining <= Duration.zero) {
+      _timerRemaining = Duration.zero;
+      notifyListeners();
+      _onTimerExpired();
+      return;
+    }
+
+    final roundedSeconds = (remaining.inMilliseconds + 999) ~/ 1000;
+    final next = Duration(seconds: roundedSeconds);
+    if (next == _timerRemaining) return;
+    _timerRemaining = next;
+    notifyListeners();
+  }
+
+  bool get _shouldKeepCpuAwake {
+    final anyPlaying = _sessions.values.any((s) => s.state.playing);
+    return anyPlaying || _timerActive;
+  }
+
+  void _syncKeepCpuAwake() {
+    final shouldKeepAwake = _shouldKeepCpuAwake;
+    if (_keepCpuAwake == shouldKeepAwake) return;
+    _keepCpuAwake = shouldKeepAwake;
+    unawaited(_setKeepCpuAwake(shouldKeepAwake));
+  }
+
+  Future<void> _setKeepCpuAwake(bool enabled) async {
+    try {
+      await _powerChannel.invokeMethod<void>('setKeepCpuAwake', {
+        'enabled': enabled,
+      });
+    } on MissingPluginException {
+      // Non-Android platforms don't expose this channel.
+    } catch (e) {
+      debugPrint('AudioProvider._setKeepCpuAwake error: $e');
+    }
   }
 
   /// Reorder sessions in the display list.
@@ -996,7 +1230,9 @@ class AudioProvider with ChangeNotifier {
     final session = _sessions[sessionId];
     // Guard: don't advance if already loading, or if single-loop (player handles it)
     if (session == null || session.isLoading) return;
-    if (session.loopMode == SessionLoopMode.single) return; // LoopMode.one handles it
+    if (session.loopMode == SessionLoopMode.single) {
+      return; // LoopMode.one handles it
+    }
 
     final nextPath = _nextPathFor(session, forward: true);
     if (nextPath == null) return;
@@ -1021,7 +1257,7 @@ class AudioProvider with ChangeNotifier {
       case SessionLoopMode.single:
         return currentTrack.path;
 
-      case SessionLoopMode.random:
+      case SessionLoopMode.crossRandom:
         if (forward) {
           final all = _library.map((t) => t.path).toList();
           if (all.length == 1) return all.first;
@@ -1038,23 +1274,43 @@ class AudioProvider with ChangeNotifier {
           return _nextPathFor(session, forward: true);
         }
 
-      case SessionLoopMode.folder:
-        final scope = _library
-            .where((t) => t.groupKey == currentTrack.groupKey)
-            .toList()
-          ..sort(getTrackComparator);
+      case SessionLoopMode.folderSequential:
+        final scope =
+            _library.where((t) => t.groupKey == currentTrack.groupKey).toList()
+              ..sort(getTrackComparator);
         if (scope.isEmpty) return currentTrack.path;
         final idx = scope.indexWhere((t) => t.path == currentTrack.path);
         if (idx < 0) return scope.first.path;
         final next = (idx + (forward ? 1 : -1) + scope.length) % scope.length;
         return scope[next].path;
 
-      case SessionLoopMode.crossFolder:
+      case SessionLoopMode.crossSequential:
         final all = [..._library]..sort(getTrackComparator);
         final idx = all.indexWhere((t) => t.path == currentTrack.path);
         if (idx < 0) return all.first.path;
         final next = (idx + (forward ? 1 : -1) + all.length) % all.length;
         return all[next].path;
+
+      case SessionLoopMode.folderRandom:
+        if (forward) {
+          final scope = _library
+              .where((t) => t.groupKey == currentTrack.groupKey)
+              .map((t) => t.path)
+              .toList();
+          if (scope.isEmpty) return currentTrack.path;
+          if (scope.length == 1) return scope.first;
+          final rnd = Random();
+          String candidate = scope[rnd.nextInt(scope.length)];
+          int guard = 0;
+          while (candidate == currentTrack.path && guard < 10) {
+            candidate = scope[rnd.nextInt(scope.length)];
+            guard++;
+          }
+          return candidate;
+        } else {
+          // Prev in random: just random too
+          return _nextPathFor(session, forward: true);
+        }
     }
   }
 }

@@ -3,6 +3,7 @@ package com.example.music_player
 import android.content.ContentUris
 import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.webkit.MimeTypeMap
@@ -17,6 +18,8 @@ import java.util.Locale
 
 class MainActivity : AudioServiceActivity() {
     private val fileCacheChannel = "music_player/file_cache"
+    private val powerChannel = "music_player/power"
+    private var partialWakeLock: PowerManager.WakeLock? = null
     private val blockedExtensions = setOf(
         "vtt", "srt", "ass", "ssa", "lrc", "txt", "md", "json", "xml",
         "jpg", "jpeg", "png", "gif", "webp", "bmp", "heic", "heif",
@@ -25,6 +28,18 @@ class MainActivity : AudioServiceActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, powerChannel)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "setKeepCpuAwake" -> {
+                        val enabled = call.argument<Boolean>("enabled") ?: false
+                        setKeepCpuAwake(enabled)
+                        result.success(null)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, fileCacheChannel)
             .setMethodCallHandler { call, result ->
@@ -100,6 +115,45 @@ class MainActivity : AudioServiceActivity() {
             }
     }
 
+
+    override fun onDestroy() {
+        releaseKeepCpuAwake()
+        super.onDestroy()
+    }
+
+    private fun setKeepCpuAwake(enabled: Boolean) {
+        if (!enabled) {
+            releaseKeepCpuAwake()
+            return
+        }
+        if (partialWakeLock?.isHeld == true) return
+
+        try {
+            val pm = getSystemService(POWER_SERVICE) as PowerManager
+            partialWakeLock = pm.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "$packageName:audio_timer_lock"
+            ).apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        } catch (_: SecurityException) {
+            partialWakeLock = null
+        } catch (_: RuntimeException) {
+            partialWakeLock = null
+        }
+    }
+
+    private fun releaseKeepCpuAwake() {
+        val lock = partialWakeLock ?: return
+        try {
+            if (lock.isHeld) lock.release()
+        } catch (_: RuntimeException) {
+            // Ignore stale wakelock state.
+        } finally {
+            partialWakeLock = null
+        }
+    }
     private data class ScannedTrack(
         val path: String,
         val title: String,

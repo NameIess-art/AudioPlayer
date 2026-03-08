@@ -7,12 +7,9 @@ import 'theme/theme_provider.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
-  // Note: just_audio_background is NOT initialized here because it patches 
-  // AudioPlayer globally and limits playback to a single stream at a time,
-  // which conflicts with our concurrent multi-session architecture.
-  // Background audio is still supported via the FOREGROUND_SERVICE permission.
 
+  // just_audio_background is intentionally not initialized because this app
+  // supports concurrent sessions with multiple players.
   runApp(
     MultiProvider(
       providers: [
