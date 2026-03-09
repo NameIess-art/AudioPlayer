@@ -1,12 +1,14 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../i18n/app_language_provider.dart';
 import '../providers/audio_provider.dart';
 import 'library_tab.dart';
 import 'playlist_tab.dart';
 import 'settings_tab.dart';
 import 'timer_tab.dart';
-import 'video_converter_tab.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -34,17 +36,17 @@ class _MainScreenState extends State<MainScreen> {
     _MainDestination(
       icon: Icons.library_music_outlined,
       selectedIcon: Icons.library_music_rounded,
-      label: 'Library',
+      labelKey: 'nav_library',
     ),
     _MainDestination(
       icon: Icons.graphic_eq_outlined,
       selectedIcon: Icons.graphic_eq_rounded,
-      label: 'Sessions',
+      labelKey: 'nav_sessions',
     ),
     _MainDestination(
       icon: Icons.tune_outlined,
       selectedIcon: Icons.tune_rounded,
-      label: 'Settings',
+      labelKey: 'nav_settings',
     ),
   ];
 
@@ -90,41 +92,41 @@ class _MainScreenState extends State<MainScreen> {
                   curve: _pageTransitionCurve,
                   child: Align(
                     alignment: Alignment.topCenter,
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(
-                        maxWidth: isDesktop ? 980 : 760,
-                      ),
-                      child: Padding(
-                        padding: EdgeInsets.fromLTRB(
-                          isDesktop ? 24 : 10,
-                          isDesktop ? 22 : 10,
-                          isDesktop ? 24 : 10,
-                          isDesktop ? 22 : 8,
-                        ),
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            color: cs.surface.withValues(
-                              alpha: isDesktop ? 0.9 : 0.97,
-                            ),
-                            borderRadius: radius,
-                            border: Border.all(
-                              color: cs.outlineVariant.withValues(alpha: 0.75),
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: cs.shadow.withValues(alpha: 0.08),
-                                blurRadius: 20,
-                                offset: const Offset(0, 8),
+                    child: isDesktop
+                        ? ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 980),
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(
+                                24,
+                                22,
+                                24,
+                                22,
                               ),
-                            ],
-                          ),
-                          child: ClipRRect(
-                            borderRadius: radius,
-                            child: _pages[index],
-                          ),
-                        ),
-                      ),
-                    ),
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  color: cs.surface.withValues(alpha: 0.9),
+                                  borderRadius: radius,
+                                  border: Border.all(
+                                    color: cs.outlineVariant.withValues(
+                                      alpha: 0.75,
+                                    ),
+                                  ),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: cs.shadow.withValues(alpha: 0.08),
+                                      blurRadius: 20,
+                                      offset: const Offset(0, 8),
+                                    ),
+                                  ],
+                                ),
+                                child: ClipRRect(
+                                  borderRadius: radius,
+                                  child: _pages[index],
+                                ),
+                              ),
+                            ),
+                          )
+                        : _pages[index],
                   ),
                 ),
               ),
@@ -132,39 +134,6 @@ class _MainScreenState extends State<MainScreen> {
           ),
         );
       }),
-    );
-  }
-
-  void _openVideoConverterFloating(BuildContext context) {
-    showDialog<void>(
-      context: context,
-      barrierDismissible: true,
-      builder: (dialogContext) {
-        final size = MediaQuery.of(dialogContext).size;
-        final dialogWidth = size.width > 700 ? 620.0 : size.width - 20;
-        final dialogHeight = size.height - 32;
-
-        return Dialog(
-          insetPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 16),
-          clipBehavior: Clip.antiAlias,
-          child: SizedBox(
-            width: dialogWidth,
-            height: dialogHeight,
-            child: Stack(
-              children: [
-                const Positioned.fill(child: VideoConverterTab()),
-                Positioned(
-                  right: 16,
-                  bottom: 16,
-                  child: _BottomRightCloseButton(
-                    onPressed: () => Navigator.of(dialogContext).pop(),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
     );
   }
 
@@ -192,19 +161,19 @@ class _MainScreenState extends State<MainScreen> {
     return '$m:$s';
   }
 
-  String _timerFabLabel(AudioProvider provider) {
+  String _timerFabLabel(AudioProvider provider, AppLanguageProvider i18n) {
     final configured = provider.timerDuration != null;
-    if (!configured) return 'Timer';
+    if (!configured) return i18n.tr('timer');
 
     final remaining = provider.timerRemaining ?? provider.timerDuration!;
     if (provider.timerActive) {
       return _fmtDuration(remaining);
     }
     if (remaining <= Duration.zero) {
-      return 'Done';
+      return i18n.tr('done');
     }
     if (provider.timerMode == TimerMode.trigger) {
-      return 'Play + ${_fmtDuration(remaining)}';
+      return i18n.tr('timer_play_plus', {'time': _fmtDuration(remaining)});
     }
     return _fmtDuration(remaining);
   }
@@ -212,33 +181,16 @@ class _MainScreenState extends State<MainScreen> {
   Widget? _buildFloatingActionButton(
     BuildContext context,
     AudioProvider audioProvider,
+    AppLanguageProvider i18n,
   ) {
-    final cs = Theme.of(context).colorScheme;
-
     if (_currentIndex == 1) {
       return Semantics(
         button: true,
-        label: 'Open timer settings',
-        child: FloatingActionButton.extended(
+        label: i18n.tr('open_timer_settings'),
+        child: _GlassFloatingButton(
+          icon: Icons.timer_rounded,
+          label: _timerFabLabel(audioProvider, i18n),
           onPressed: () => _openTimerSettingsPage(context),
-          backgroundColor: cs.primaryContainer,
-          foregroundColor: cs.onPrimaryContainer,
-          icon: const Icon(Icons.timer_rounded),
-          label: Text(_timerFabLabel(audioProvider)),
-        ),
-      );
-    }
-
-    if (_currentIndex == 0) {
-      return Semantics(
-        button: true,
-        label: 'Open video to audio converter',
-        child: FloatingActionButton.extended(
-          onPressed: () => _openVideoConverterFloating(context),
-          backgroundColor: cs.secondaryContainer,
-          foregroundColor: cs.onSecondaryContainer,
-          icon: const Icon(Icons.video_library_rounded),
-          label: const Text('Convert Video'),
         ),
       );
     }
@@ -248,38 +200,116 @@ class _MainScreenState extends State<MainScreen> {
 
   Widget _buildBottomBar(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final i18n = context.watch<AppLanguageProvider>();
+    final items = _destinations.asMap().entries.map((entry) {
+      final index = entry.key;
+      final item = entry.value;
+      final selected = index == _currentIndex;
+      final label = i18n.tr(item.labelKey);
+
+      return Expanded(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 3),
+          child: Semantics(
+            button: true,
+            selected: selected,
+            label: label,
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(999),
+                onTap: () => _switchPage(index),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOutCubic,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(999),
+                    color: selected
+                        ? cs.surface.withValues(alpha: 0.28)
+                        : Colors.transparent,
+                    border: Border.all(
+                      color: selected
+                          ? cs.outlineVariant.withValues(alpha: 0.45)
+                          : Colors.transparent,
+                    ),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        selected ? item.selectedIcon : item.icon,
+                        size: 28,
+                        color: selected ? cs.onSurface : cs.onSurfaceVariant,
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          fontSize: 9,
+                          fontWeight: selected
+                              ? FontWeight.w800
+                              : FontWeight.w700,
+                          color: selected ? cs.onSurface : cs.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }).toList();
 
     return SafeArea(
       top: false,
-      minimum: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.8)),
-          boxShadow: [
-            BoxShadow(
-              color: cs.shadow.withValues(alpha: 0.06),
-              blurRadius: 16,
-              offset: const Offset(0, 8),
-            ),
-          ],
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(24),
-          child: NavigationBar(
-            height: 72,
-            selectedIndex: _currentIndex,
-            labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-            onDestinationSelected: _switchPage,
-            destinations: _destinations
-                .map(
-                  (item) => NavigationDestination(
-                    icon: Icon(item.icon),
-                    selectedIcon: Icon(item.selectedIcon),
-                    label: item.label,
+      minimum: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+      child: Align(
+        alignment: Alignment.bottomCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(999),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(999),
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        cs.surface.withValues(alpha: 0.34),
+                        cs.surfaceContainerHighest.withValues(alpha: 0.16),
+                      ],
+                    ),
+                    border: Border.all(
+                      color: cs.outlineVariant.withValues(alpha: 0.34),
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: cs.shadow.withValues(alpha: 0.2),
+                        blurRadius: 34,
+                        offset: const Offset(0, 14),
+                      ),
+                    ],
                   ),
-                )
-                .toList(),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
+                    child: Row(children: items),
+                  ),
+                ),
+              ),
+            ),
           ),
         ),
       ),
@@ -289,6 +319,7 @@ class _MainScreenState extends State<MainScreen> {
   Widget _buildDesktopNavigation(
     BuildContext context,
     AudioProvider audioProvider,
+    AppLanguageProvider i18n,
   ) {
     final cs = Theme.of(context).colorScheme;
 
@@ -323,7 +354,7 @@ class _MainScreenState extends State<MainScreen> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    'ASMR Player',
+                    i18n.tr('asmr_player'),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
@@ -348,7 +379,7 @@ class _MainScreenState extends State<MainScreen> {
                     (item) => NavigationRailDestination(
                       icon: Icon(item.icon),
                       selectedIcon: Icon(item.selectedIcon),
-                      label: Text(item.label),
+                      label: Text(i18n.tr(item.labelKey)),
                     ),
                   )
                   .toList(),
@@ -358,18 +389,9 @@ class _MainScreenState extends State<MainScreen> {
             padding: const EdgeInsets.fromLTRB(8, 8, 8, 2),
             child: _DesktopQuickAction(
               icon: Icons.timer_rounded,
-              title: _timerFabLabel(audioProvider),
-              subtitle: 'Timer',
+              title: _timerFabLabel(audioProvider, i18n),
+              subtitle: i18n.tr('timer'),
               onTap: () => _openTimerSettingsPage(context),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(8, 8, 8, 6),
-            child: _DesktopQuickAction(
-              icon: Icons.video_library_rounded,
-              title: 'Converter',
-              subtitle: 'Extract audio',
-              onTap: () => _openVideoConverterFloating(context),
             ),
           ),
         ],
@@ -377,11 +399,20 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
+  double _mobileTimerButtonBottom(BuildContext context) {
+    final safeBottom = MediaQuery.paddingOf(context).bottom;
+    return safeBottom + 90;
+  }
+
   @override
   Widget build(BuildContext context) {
     final audioProvider = context.watch<AudioProvider>();
+    final i18n = context.watch<AppLanguageProvider>();
     final width = MediaQuery.sizeOf(context).width;
     final isDesktop = width >= _desktopBreakpoint;
+    final mobileFab = isDesktop
+        ? null
+        : _buildFloatingActionButton(context, audioProvider, i18n);
 
     return Scaffold(
       extendBody: !isDesktop,
@@ -393,18 +424,29 @@ class _MainScreenState extends State<MainScreen> {
           if (isDesktop)
             Row(
               children: [
-                _buildDesktopNavigation(context, audioProvider),
+                _buildDesktopNavigation(context, audioProvider, i18n),
                 Expanded(child: _buildAnimatedBody(isDesktop: true)),
               ],
             )
           else
-            _buildAnimatedBody(isDesktop: false),
+            Stack(
+              fit: StackFit.expand,
+              children: [
+                _buildAnimatedBody(isDesktop: false),
+                Align(
+                  alignment: Alignment.bottomCenter,
+                  child: _buildBottomBar(context),
+                ),
+                if (mobileFab != null)
+                  Positioned(
+                    right: 16,
+                    bottom: _mobileTimerButtonBottom(context),
+                    child: mobileFab,
+                  ),
+              ],
+            ),
         ],
       ),
-      floatingActionButton: isDesktop
-          ? null
-          : _buildFloatingActionButton(context, audioProvider),
-      bottomNavigationBar: isDesktop ? null : _buildBottomBar(context),
     );
   }
 }
@@ -467,10 +509,7 @@ class _GlowOrb extends StatelessWidget {
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           gradient: RadialGradient(
-            colors: [
-              color,
-              color.withValues(alpha: 0.0),
-            ],
+            colors: [color, color.withValues(alpha: 0.0)],
           ),
         ),
       ),
@@ -538,10 +577,7 @@ class _DesktopQuickAction extends StatelessWidget {
                   ],
                 ),
               ),
-              Icon(
-                Icons.chevron_right_rounded,
-                color: cs.onSurfaceVariant,
-              ),
+              Icon(Icons.chevron_right_rounded, color: cs.onSurfaceVariant),
             ],
           ),
         ),
@@ -554,12 +590,12 @@ class _MainDestination {
   const _MainDestination({
     required this.icon,
     required this.selectedIcon,
-    required this.label,
+    required this.labelKey,
   });
 
   final IconData icon;
   final IconData selectedIcon;
-  final String label;
+  final String labelKey;
 }
 
 class _BottomRightCloseButton extends StatelessWidget {
@@ -569,13 +605,87 @@ class _BottomRightCloseButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final i18n = context.watch<AppLanguageProvider>();
     return Semantics(
       button: true,
-      label: 'Close',
+      label: i18n.tr('close'),
       child: FloatingActionButton.small(
         heroTag: null,
         onPressed: onPressed,
         child: const Icon(Icons.close_rounded),
+      ),
+    );
+  }
+}
+
+class _GlassFloatingButton extends StatelessWidget {
+  const _GlassFloatingButton({
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(18),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                cs.surface.withValues(alpha: 0.46),
+                cs.surfaceContainerHighest.withValues(alpha: 0.22),
+              ],
+            ),
+            border: Border.all(
+              color: cs.outlineVariant.withValues(alpha: 0.42),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: cs.shadow.withValues(alpha: 0.2),
+                blurRadius: 24,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: onPressed,
+              borderRadius: BorderRadius.circular(18),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 10,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(icon, size: 20, color: cs.onSurface),
+                    const SizedBox(width: 8),
+                    Text(
+                      label,
+                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                        color: cs.onSurface,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:path/path.dart' as path;
 import 'package:provider/provider.dart';
 
+import '../i18n/app_language_provider.dart';
 import '../providers/audio_provider.dart';
 import '../theme/theme_provider.dart';
 import '../widgets/top_page_header.dart';
@@ -12,6 +13,7 @@ class SettingsTab extends StatelessWidget {
   const SettingsTab({super.key});
 
   Future<void> _clearTempCache(BuildContext context) async {
+    final i18n = context.read<AppLanguageProvider>();
     final cacheDir = Directory(
       path.join(Directory.systemTemp.path, 'music_player_imports'),
     );
@@ -20,7 +22,9 @@ class SettingsTab extends StatelessWidget {
       if (context.mounted) {
         ScaffoldMessenger.of(context)
           ..clearSnackBars()
-          ..showSnackBar(const SnackBar(content: Text('临时缓存已清理。')));
+          ..showSnackBar(
+            SnackBar(content: Text(i18n.tr('temp_cache_cleaned'))),
+          );
       }
       return;
     }
@@ -28,28 +32,34 @@ class SettingsTab extends StatelessWidget {
     if (context.mounted) {
       ScaffoldMessenger.of(context)
         ..clearSnackBars()
-        ..showSnackBar(const SnackBar(content: Text('没有可清理的临时缓存。')));
+        ..showSnackBar(SnackBar(content: Text(i18n.tr('temp_cache_none'))));
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final i18n = context.watch<AppLanguageProvider>();
     final themeProvider = context.watch<ThemeProvider>();
     final audioProvider = context.watch<AudioProvider>();
     final cs = Theme.of(context).colorScheme;
+    final descStyle = Theme.of(context).textTheme.bodySmall?.copyWith(
+      fontSize: 11,
+      height: 1.25,
+      color: cs.onSurfaceVariant,
+    );
     final format = audioProvider.converterFormat;
     final bitrate = audioProvider.converterBitrate;
     final bitrateEnabled = format != 'wav' && format != 'flac';
 
     return SafeArea(
       child: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 26),
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 132),
         children: [
-          const TopPageHeader(
+          TopPageHeader(
             icon: Icons.tune_rounded,
-            title: '设置',
-            padding: EdgeInsets.zero,
-            bottomSpacing: 18,
+            title: i18n.tr('settings'),
+            padding: const EdgeInsets.fromLTRB(0, 16, 0, 0),
+            bottomSpacing: 10,
           ),
           Card(
             child: Padding(
@@ -59,8 +69,11 @@ class SettingsTab extends StatelessWidget {
                   SwitchListTile(
                     value: themeProvider.isDarkMode,
                     onChanged: themeProvider.toggleTheme,
-                    title: const Text('深色模式'),
-                    subtitle: const Text('夜间使用更低眩光的配色。'),
+                    title: Text(i18n.tr('dark_mode')),
+                    subtitle: Text(
+                      i18n.tr('dark_mode_subtitle'),
+                      style: descStyle,
+                    ),
                     secondary: const Icon(Icons.dark_mode_rounded),
                     contentPadding: const EdgeInsets.symmetric(horizontal: 8),
                     shape: RoundedRectangleBorder(
@@ -69,10 +82,59 @@ class SettingsTab extends StatelessWidget {
                   ),
                   const SizedBox(height: 8),
                   ListTile(
+                    title: Text(i18n.tr('language')),
+                    subtitle: Text(
+                      i18n.tr('language_subtitle'),
+                      style: descStyle,
+                    ),
+                    leading: Container(
+                      width: 38,
+                      height: 38,
+                      decoration: BoxDecoration(
+                        color: cs.primaryContainer,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
+                        Icons.language_rounded,
+                        color: cs.onPrimaryContainer,
+                      ),
+                    ),
+                    trailing: DropdownButtonHideUnderline(
+                      child: DropdownButton<AppLanguage>(
+                        value: i18n.language,
+                        borderRadius: BorderRadius.circular(12),
+                        onChanged: (value) {
+                          if (value != null) {
+                            i18n.setLanguage(value);
+                          }
+                        },
+                        items: AppLanguage.values
+                            .map(
+                              (lang) => DropdownMenuItem<AppLanguage>(
+                                value: lang,
+                                child: Text(
+                                  i18n.languageName(lang),
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                            )
+                            .toList(),
+                      ),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 2,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  ListTile(
                     onTap: () => _clearTempCache(context),
-                    title: const Text('清理临时缓存'),
-                    subtitle: const Text(
-                      '删除导入过程中生成的临时文件。',
+                    title: Text(i18n.tr('clear_temp_cache')),
+                    subtitle: Text(
+                      i18n.tr('clear_temp_cache_subtitle'),
+                      style: descStyle,
                     ),
                     leading: Container(
                       width: 38,
@@ -107,10 +169,9 @@ class SettingsTab extends StatelessWidget {
                       Icon(Icons.transform_rounded, color: cs.primary),
                       const SizedBox(width: 8),
                       Text(
-                        '转码默认参数',
-                        style: Theme.of(
-                          context,
-                        ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+                        i18n.tr('transcode_defaults'),
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w800),
                       ),
                     ],
                   ),
@@ -119,7 +180,7 @@ class SettingsTab extends StatelessWidget {
                     children: [
                       Expanded(
                         child: _SelectField(
-                          label: '格式',
+                          label: i18n.tr('format'),
                           value: format,
                           items: AudioProvider.converterFormats,
                           displayBuilder: (item) => item.toUpperCase(),
@@ -133,14 +194,16 @@ class SettingsTab extends StatelessWidget {
                       const SizedBox(width: 12),
                       Expanded(
                         child: _SelectField(
-                          label: '码率',
+                          label: i18n.tr('bitrate'),
                           value: bitrate,
                           items: AudioProvider.converterBitrates,
                           displayBuilder: (item) => item,
                           enabled: bitrateEnabled,
                           onChanged: (value) {
                             if (value != null) {
-                              audioProvider.setConverterSettings(bitrate: value);
+                              audioProvider.setConverterSettings(
+                                bitrate: value,
+                              );
                             }
                           },
                         ),
@@ -150,11 +213,11 @@ class SettingsTab extends StatelessWidget {
                   const SizedBox(height: 10),
                   Text(
                     bitrateEnabled
-                        ? 'MP3 / AAC / OGG 输出会使用该码率。'
-                        : '${format.toUpperCase()} 使用格式内置编码参数，码率设置不生效。',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: cs.onSurfaceVariant,
-                    ),
+                        ? i18n.tr('bitrate_used')
+                        : i18n.tr('bitrate_not_used', {
+                            'format': format.toUpperCase(),
+                          }),
+                    style: descStyle,
                   ),
                 ],
               ),
@@ -169,28 +232,25 @@ class SettingsTab extends StatelessWidget {
                 children: [
                   Row(
                     children: [
-                      Icon(Icons.info_outline_rounded, color: cs.onSurfaceVariant),
+                      Icon(
+                        Icons.info_outline_rounded,
+                        color: cs.onSurfaceVariant,
+                      ),
                       const SizedBox(width: 8),
                       Text(
-                        '关于',
-                        style: Theme.of(
-                          context,
-                        ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+                        i18n.tr('about'),
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w800),
                       ),
                     ],
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    '本地音乐播放器 v1.0.1',
+                    i18n.tr('app_version'),
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
                   const SizedBox(height: 2),
-                  Text(
-                    '支持并发会话与高保真音频播放。',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: cs.onSurfaceVariant,
-                    ),
-                  ),
+                  Text(i18n.tr('app_desc'), style: descStyle),
                 ],
               ),
             ),

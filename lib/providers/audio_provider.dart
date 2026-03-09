@@ -98,6 +98,15 @@ class FolderNode extends LibraryNode {
     }
     return list;
   }
+
+  int get leafFolderCount {
+    final childFolders = children.whereType<FolderNode>().toList();
+    if (childFolders.isEmpty) return 1;
+    return childFolders.fold<int>(
+      0,
+      (total, folder) => total + folder.leafFolderCount,
+    );
+  }
 }
 
 class TrackNode extends LibraryNode {
@@ -664,25 +673,28 @@ class AudioProvider with ChangeNotifier {
 
       // Ensure root exists
       if (!rootNodes.containsKey(matchedRoot)) {
-        final rootName = path.basename(matchedRoot);
-        rootNodes[matchedRoot] = FolderNode(
-          rootName.isEmpty ? matchedRoot : rootName,
-          matchedRoot,
-        );
+        final rootName = _resolveRootNodeName(matchedRoot, track);
+        rootNodes[matchedRoot] = FolderNode(rootName, matchedRoot);
       }
 
       // Build intermediate folders
       FolderNode currentNode = rootNodes[matchedRoot]!;
+      final rootDisplayName = currentNode.name;
 
       if (dirPath != matchedRoot && dirPath.length > matchedRoot.length) {
         // e.g. matchedRoot: /a/b, dirPath: /a/b/c/d
         String relDir = dirPath.substring(matchedRoot.length);
+        if (relDir.startsWith('::')) {
+          // Android SAF groupKey format: "<rootUri>::<relative/path>"
+          relDir = relDir.substring(2);
+        }
         if (relDir.startsWith(path.separator)) relDir = relDir.substring(1);
 
-        final parts = relDir.split(path.separator);
+        final parts = relDir.split(RegExp(r'[\\/]+'));
         String currentPath = matchedRoot;
 
-        for (final part in parts) {
+        for (final rawPart in parts) {
+          final part = _sanitizeFolderPart(rawPart, rootDisplayName);
           if (part.isEmpty) continue;
           currentPath = currentPath.endsWith(path.separator)
               ? currentPath + part
@@ -739,6 +751,117 @@ class AudioProvider with ChangeNotifier {
     topLevel.addAll(singleFiles);
 
     return topLevel;
+  }
+
+  String _resolveRootNodeName(String rootPath, MusicTrack track) {
+    final subtitle = _normalizeDisplaySegment(track.groupSubtitle);
+    if (subtitle.isNotEmpty) {
+      final fromSubtitle = _normalizeDisplaySegment(
+        subtitle.split('/').first.trim(),
+      );
+      if (fromSubtitle.isNotEmpty && fromSubtitle != rootPath) {
+        return fromSubtitle;
+      }
+    }
+
+    final decodedTreeName = _decodeTreeRootName(rootPath);
+    if (decodedTreeName != null && decodedTreeName.isNotEmpty) {
+      return decodedTreeName;
+    }
+
+    final baseName = _normalizeDisplaySegment(path.basename(rootPath));
+    return baseName.isEmpty ? rootPath : baseName;
+  }
+
+  String? _decodeTreeRootName(String rawPath) {
+    if (!rawPath.startsWith('content://')) return null;
+    final uri = Uri.tryParse(rawPath);
+    if (uri == null) return null;
+
+    final segments = uri.pathSegments;
+    final treeIndex = segments.indexOf('tree');
+    if (treeIndex < 0 || treeIndex + 1 >= segments.length) return null;
+
+    final documentId = _safeUriDecode(segments[treeIndex + 1]);
+    if (documentId.isEmpty) return null;
+    final lastPart = documentId.split('/').last;
+    final colonIndex = lastPart.lastIndexOf(':');
+    if (colonIndex >= 0 && colonIndex + 1 < lastPart.length) {
+      return _normalizeDisplaySegment(
+        lastPart.substring(colonIndex + 1).trim(),
+      );
+    }
+    return _normalizeDisplaySegment(lastPart.trim());
+  }
+
+  String _normalizeDisplaySegment(String value) {
+    var normalized = value.trim();
+    if (normalized.isEmpty) return normalized;
+
+    normalized = _safeUriDecode(normalized);
+
+    // Some SAF providers return mojibake-like latin1-decoded UTF-8 names.
+    final maybeFixed = _tryLatin1ToUtf8(normalized);
+    if (_looksLikeMojibake(normalized) && !_looksLikeMojibake(maybeFixed)) {
+      normalized = maybeFixed;
+    }
+    return normalized;
+  }
+
+  String _safeUriDecode(String value) {
+    try {
+      return Uri.decodeComponent(value);
+    } catch (_) {
+      return value;
+    }
+  }
+
+  String _tryLatin1ToUtf8(String input) {
+    try {
+      return utf8.decode(latin1.encode(input), allowMalformed: false);
+    } catch (_) {
+      return input;
+    }
+  }
+
+  bool _looksLikeMojibake(String value) {
+    const mojibakePattern =
+        r'[ÃÂÅÆÇÐÑØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõöøùúûüýþÿ�]';
+    return RegExp(mojibakePattern).hasMatch(value);
+  }
+
+  String _sanitizeFolderPart(String rawPart, String rootDisplayName) {
+    var part = _normalizeDisplaySegment(rawPart);
+    if (part.isEmpty) return part;
+
+    part = part.replaceFirst(
+      RegExp(r'^document[\\/]+', caseSensitive: false),
+      '',
+    );
+    if (part.isEmpty) return part;
+
+    if (part.contains('::')) {
+      part = part.split('::').last;
+    }
+
+    part = _normalizeDisplaySegment(part);
+    if (part.startsWith('primary:') ||
+        part.startsWith('home:') ||
+        part.startsWith('raw:')) {
+      final idx = part.indexOf(':');
+      if (idx >= 0 && idx + 1 < part.length) {
+        part = part.substring(idx + 1);
+      }
+    }
+
+    if (part.contains('/')) {
+      part = part.split('/').last;
+    }
+    part = part.trim();
+
+    if (part.toLowerCase() == 'document') return '';
+    if (part == rootDisplayName) return '';
+    return part;
   }
 
   MusicTrack? trackByPath(String trackPath) {

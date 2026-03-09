@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../i18n/app_language_provider.dart';
 import '../providers/audio_provider.dart';
 import '../widgets/top_page_header.dart';
 
@@ -44,6 +45,7 @@ class _TimerTabState extends State<TimerTab> {
 
   @override
   Widget build(BuildContext context) {
+    final i18n = context.watch<AppLanguageProvider>();
     final provider = context.watch<AudioProvider>();
     final cs = Theme.of(context).colorScheme;
     final timerConfigured = provider.timerDuration != null;
@@ -66,10 +68,10 @@ class _TimerTabState extends State<TimerTab> {
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
         children: [
           if (widget.showHeader)
-            const TopPageHeader(
+            TopPageHeader(
               icon: Icons.timer_rounded,
-              title: '计时器',
-              padding: EdgeInsets.zero,
+              title: i18n.tr('timer_title'),
+              padding: const EdgeInsets.fromLTRB(0, 0, 0, 0),
               bottomSpacing: 16,
             ),
           if (timerActive || timerExpired || timerWaitingTrigger) ...[
@@ -90,10 +92,10 @@ class _TimerTabState extends State<TimerTab> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      '设置倒计时',
-                      style: Theme.of(
-                        context,
-                      ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+                      i18n.tr('set_countdown'),
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
                     ),
                     const SizedBox(height: 16),
                     _DurationPicker(
@@ -108,7 +110,7 @@ class _TimerTabState extends State<TimerTab> {
                     ),
                     const SizedBox(height: 18),
                     Text(
-                      '启动方式',
+                      i18n.tr('start_mode'),
                       style: Theme.of(context).textTheme.titleSmall,
                     ),
                     const SizedBox(height: 6),
@@ -128,15 +130,15 @@ class _TimerTabState extends State<TimerTab> {
                       ),
                       label: Text(
                         _selectedMode == TimerMode.manual
-                            ? '确认并立即开始'
-                            : '确认并等待播放触发',
+                            ? i18n.tr('confirm_start_now')
+                            : i18n.tr('confirm_wait_playback'),
                       ),
                     ),
                     if (_durationIsZero)
                       Padding(
                         padding: const EdgeInsets.only(top: 8),
                         child: Text(
-                          '请先设置倒计时时长。',
+                          i18n.tr('set_duration_first'),
                           style: TextStyle(color: cs.error, fontSize: 12),
                         ),
                       ),
@@ -150,7 +152,7 @@ class _TimerTabState extends State<TimerTab> {
             OutlinedButton.icon(
               onPressed: provider.cancelTimer,
               icon: const Icon(Icons.cancel_outlined),
-              label: const Text('取消计时'),
+              label: Text(i18n.tr('cancel_timer')),
               style: OutlinedButton.styleFrom(
                 foregroundColor: cs.error,
                 side: BorderSide(color: cs.error.withValues(alpha: 0.6)),
@@ -166,8 +168,8 @@ class _TimerTabState extends State<TimerTab> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     SwitchListTile(
-                      title: const Text('倒计时结束后自动恢复播放'),
-                      subtitle: const Text('在设定时刻自动恢复被计时器暂停的音频。'),
+                      title: Text(i18n.tr('auto_resume_after_timer')),
+                      subtitle: Text(i18n.tr('auto_resume_subtitle')),
                       secondary: const Icon(Icons.restore_rounded),
                       value: provider.autoResumeEnabled,
                       onChanged: (val) {
@@ -186,10 +188,15 @@ class _TimerTabState extends State<TimerTab> {
                       ListTile(
                         leading: const Icon(Icons.alarm_rounded),
                         title: Text(
-                          '恢复时间：${_fmtClockTime(provider.autoResumeHour, provider.autoResumeMinute)}',
+                          i18n.tr('resume_time', {
+                            'time': _fmtClockTime(
+                              provider.autoResumeHour,
+                              provider.autoResumeMinute,
+                            ),
+                          }),
                           style: const TextStyle(fontWeight: FontWeight.w600),
                         ),
-                        subtitle: const Text('点击选择自动恢复播放的时刻'),
+                        subtitle: Text(i18n.tr('tap_choose_resume_time')),
                         trailing: const Icon(Icons.chevron_right_rounded),
                         onTap: () async {
                           final picked = await showTimePicker(
@@ -198,7 +205,7 @@ class _TimerTabState extends State<TimerTab> {
                               hour: provider.autoResumeHour,
                               minute: provider.autoResumeMinute,
                             ),
-                            helpText: '选择自动恢复时间',
+                            helpText: i18n.tr('choose_auto_resume_time'),
                             builder: (ctx, child) => MediaQuery(
                               data: MediaQuery.of(
                                 ctx,
@@ -230,7 +237,7 @@ class _TimerTabState extends State<TimerTab> {
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 28),
                 child: Text(
-                  '设置倒计时后，可在此开启自动恢复播放功能。',
+                  i18n.tr('set_timer_to_enable_auto_resume'),
                   textAlign: TextAlign.center,
                   style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13),
                 ),
@@ -259,17 +266,18 @@ class _CountdownCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final i18n = context.watch<AppLanguageProvider>();
     final remaining = provider.timerRemaining ?? Duration.zero;
     final modeLabel = waitingTrigger
-        ? '等待播放触发'
+        ? i18n.tr('wait_play_trigger')
         : provider.timerMode == TimerMode.manual
-        ? '手动开始'
-        : '播放后自动开始';
+        ? i18n.tr('manual_start')
+        : i18n.tr('auto_start_after_play');
     final title = timerExpired
-        ? '倒计时已结束'
+        ? i18n.tr('countdown_finished')
         : waitingTrigger
-        ? '等待播放后开始计时'
-        : '倒计时进行中';
+        ? i18n.tr('waiting_to_start_countdown')
+        : i18n.tr('counting_down');
     final accent = timerExpired
         ? cs.error
         : waitingTrigger
@@ -363,24 +371,26 @@ class _CountdownCard extends StatelessWidget {
                   color: accent,
                 ),
                 const SizedBox(width: 4),
-                Text(
-                  modeLabel,
-                  style: TextStyle(fontSize: 12, color: accent),
-                ),
+                Text(modeLabel, style: TextStyle(fontSize: 12, color: accent)),
               ],
             ),
           ),
           if (timerExpired && provider.pausedByTimerPaths.isNotEmpty) ...[
             const SizedBox(height: 12),
             Text(
-              '已暂停 ${provider.pausedByTimerPaths.length} 个音频',
+              i18n.tr('paused_audio_count', {
+                'count': provider.pausedByTimerPaths.length,
+              }),
               style: TextStyle(fontSize: 12, color: cs.onErrorContainer),
             ),
           ],
           if (timerExpired && provider.autoResumeEnabled) ...[
             const SizedBox(height: 4),
             Text(
-              '将在 ${provider.autoResumeHour.toString().padLeft(2, '0')}:${provider.autoResumeMinute.toString().padLeft(2, '0')} 自动恢复',
+              i18n.tr('auto_resume_at', {
+                'time':
+                    '${provider.autoResumeHour.toString().padLeft(2, '0')}:${provider.autoResumeMinute.toString().padLeft(2, '0')}',
+              }),
               style: TextStyle(fontSize: 12, color: cs.onErrorContainer),
             ),
           ],
@@ -405,6 +415,7 @@ class _DurationPicker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final i18n = context.watch<AppLanguageProvider>();
     final cs = Theme.of(context).colorScheme;
 
     Widget picker(
@@ -470,7 +481,12 @@ class _DurationPicker extends StatelessWidget {
 
     return Row(
       children: [
-        picker('小时', hours, 5, (v) => onChanged(v, minutes, seconds)),
+        picker(
+          i18n.tr('hour'),
+          hours,
+          5,
+          (v) => onChanged(v, minutes, seconds),
+        ),
         const SizedBox(width: 4),
         Center(
           child: Text(
@@ -483,7 +499,12 @@ class _DurationPicker extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 4),
-        picker('分钟', minutes, 59, (v) => onChanged(hours, v, seconds)),
+        picker(
+          i18n.tr('minute'),
+          minutes,
+          59,
+          (v) => onChanged(hours, v, seconds),
+        ),
         const SizedBox(width: 4),
         Center(
           child: Text(
@@ -496,7 +517,12 @@ class _DurationPicker extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 4),
-        picker('秒', seconds, 59, (v) => onChanged(hours, minutes, v)),
+        picker(
+          i18n.tr('second'),
+          seconds,
+          59,
+          (v) => onChanged(hours, minutes, v),
+        ),
       ],
     );
   }
@@ -510,6 +536,7 @@ class _ModeSelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final i18n = context.watch<AppLanguageProvider>();
     final cs = Theme.of(context).colorScheme;
 
     Widget modeCard(
@@ -586,14 +613,14 @@ class _ModeSelector extends StatelessWidget {
       children: [
         modeCard(
           TimerMode.manual,
-          '手动开始',
-          '确认后立即启动倒计时。',
+          i18n.tr('manual_start'),
+          i18n.tr('manual_start_subtitle'),
           Icons.play_circle_outline_rounded,
         ),
         modeCard(
           TimerMode.trigger,
-          '播放后自动开始',
-          '确认后在检测到播放时自动启动倒计时。',
+          i18n.tr('auto_start_after_play'),
+          i18n.tr('trigger_start_subtitle'),
           Icons.sensors_rounded,
         ),
       ],

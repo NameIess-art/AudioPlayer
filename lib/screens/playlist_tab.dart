@@ -5,6 +5,7 @@ import 'package:just_audio/just_audio.dart';
 import 'package:path/path.dart' as path;
 import 'package:provider/provider.dart';
 
+import '../i18n/app_language_provider.dart';
 import '../providers/audio_provider.dart';
 import '../widgets/top_page_header.dart';
 
@@ -15,15 +16,16 @@ class PlaylistTab extends StatelessWidget {
     BuildContext context,
     AudioProvider provider,
   ) async {
+    final i18n = context.read<AppLanguageProvider>();
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('清空全部会话'),
-        content: const Text('停止并移除所有正在运行的播放会话？'),
+        title: Text(i18n.tr('clear_all_sessions')),
+        content: Text(i18n.tr('stop_remove_all_sessions')),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('取消'),
+            child: Text(i18n.tr('cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.of(ctx).pop(true),
@@ -31,7 +33,7 @@ class PlaylistTab extends StatelessWidget {
               backgroundColor: Theme.of(ctx).colorScheme.error,
               foregroundColor: Theme.of(ctx).colorScheme.onError,
             ),
-            child: const Text('清空'),
+            child: Text(i18n.tr('clear')),
           ),
         ],
       ),
@@ -41,13 +43,16 @@ class PlaylistTab extends StatelessWidget {
       if (context.mounted) {
         ScaffoldMessenger.of(context)
           ..clearSnackBars()
-          ..showSnackBar(const SnackBar(content: Text('已清空全部会话。')));
+          ..showSnackBar(
+            SnackBar(content: Text(i18n.tr('all_sessions_cleared'))),
+          );
       }
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final i18n = context.watch<AppLanguageProvider>();
     final provider = context.watch<AudioProvider>();
     final sessions = provider.activeSessions;
     final playingCount = sessions.where((s) => s.state.playing).length;
@@ -57,43 +62,49 @@ class PlaylistTab extends StatelessWidget {
         children: [
           TopPageHeader(
             icon: Icons.graphic_eq_rounded,
-            title: '播放会话',
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Semantics(
-                  button: true,
-                  label: '暂停全部会话',
-                  child: IconButton.filledTonal(
-                    onPressed: sessions.isEmpty
-                        ? null
-                        : () {
-                            provider.pauseAllSessions();
-                            ScaffoldMessenger.of(context)
-                              ..clearSnackBars()
-                              ..showSnackBar(
-                                const SnackBar(content: Text('已暂停全部会话。')),
-                              );
-                          },
-                    icon: const Icon(Icons.pause_circle_outline_rounded),
-                    tooltip: '全部暂停',
+            title: i18n.tr('playback_sessions'),
+            trailing: SizedBox(
+              width: 112,
+              height: 44,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  Semantics(
+                    button: true,
+                    label: i18n.tr('pause_all_sessions'),
+                    child: IconButton(
+                      onPressed: sessions.isEmpty
+                          ? null
+                          : () {
+                              provider.pauseAllSessions();
+                              ScaffoldMessenger.of(context)
+                                ..clearSnackBars()
+                                ..showSnackBar(
+                                  SnackBar(
+                                    content: Text(i18n.tr('all_paused')),
+                                  ),
+                                );
+                            },
+                      icon: const Icon(Icons.pause_circle_outline_rounded),
+                      tooltip: i18n.tr('pause_all_sessions'),
+                    ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                Semantics(
-                  button: true,
-                  label: '清空全部会话',
-                  child: IconButton.filledTonal(
-                    onPressed: sessions.isEmpty
-                        ? null
-                        : () => _confirmClearAll(context, provider),
-                    icon: const Icon(Icons.delete_sweep_rounded),
-                    tooltip: '清空全部',
+                  Semantics(
+                    button: true,
+                    label: i18n.tr('clear_all_sessions'),
+                    child: IconButton(
+                      onPressed: sessions.isEmpty
+                          ? null
+                          : () => _confirmClearAll(context, provider),
+                      icon: const Icon(Icons.delete_sweep_rounded),
+                      tooltip: i18n.tr('clear_all_sessions'),
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
             bottomSpacing: 10,
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
@@ -103,11 +114,11 @@ class PlaylistTab extends StatelessWidget {
               children: [
                 _MetricChip(
                   icon: Icons.queue_music_rounded,
-                  text: '${sessions.length} 个会话',
+                  text: i18n.tr('sessions_count', {'count': sessions.length}),
                 ),
                 _MetricChip(
                   icon: Icons.play_circle_rounded,
-                  text: '播放中 $playingCount 个',
+                  text: i18n.tr('playing_count', {'count': playingCount}),
                 ),
               ],
             ),
@@ -116,7 +127,7 @@ class PlaylistTab extends StatelessWidget {
             child: sessions.isEmpty
                 ? const _SessionsEmptyState()
                 : ListView.builder(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 132),
                     itemCount: sessions.length,
                     addAutomaticKeepAlives: false,
                     addRepaintBoundaries: true,
@@ -174,6 +185,7 @@ class _SessionsEmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final i18n = context.watch<AppLanguageProvider>();
     final cs = Theme.of(context).colorScheme;
     return Center(
       child: Padding(
@@ -199,18 +211,18 @@ class _SessionsEmptyState extends StatelessWidget {
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  '当前没有活跃会话',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+                  i18n.tr('no_active_sessions'),
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  '请先到音乐库播放音频，再创建并发会话。',
+                  i18n.tr('go_library_hint'),
                   textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: cs.onSurfaceVariant,
-                  ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
                 ),
               ],
             ),
@@ -254,9 +266,14 @@ class _SessionCardState extends State<_SessionCard> {
   }
 
   String _loopModeSummary(SessionLoopMode mode) {
-    if (_isSingleLoop(mode)) return '单曲循环';
-    final scope = _isCrossFolderLoop(mode) ? '跨文件夹' : '当前文件夹';
-    final order = _isShuffleLoop(mode) ? '随机' : '顺序';
+    final i18n = context.read<AppLanguageProvider>();
+    if (_isSingleLoop(mode)) return i18n.tr('single_loop');
+    final scope = _isCrossFolderLoop(mode)
+        ? i18n.tr('cross_folder')
+        : i18n.tr('current_folder');
+    final order = _isShuffleLoop(mode)
+        ? i18n.tr('random_order')
+        : i18n.tr('sequential_order');
     return '$order · $scope';
   }
 
@@ -294,12 +311,13 @@ class _SessionCardState extends State<_SessionCard> {
   }
 
   void _showTrackSwitcher(BuildContext context) {
+    final i18n = context.read<AppLanguageProvider>();
     final siblings = provider.tracksInSameGroup(session.currentTrackPath);
     if (siblings.isEmpty) {
       ScaffoldMessenger.of(context)
         ..clearSnackBars()
         ..showSnackBar(
-          const SnackBar(content: Text('该文件夹没有可切换的其他音频。')),
+          SnackBar(content: Text(i18n.tr('no_other_audio_in_folder'))),
         );
       return;
     }
@@ -340,10 +358,10 @@ class _SessionCardState extends State<_SessionCard> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          '切换音频',
-                          style: Theme.of(
-                            ctx,
-                          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+                          i18n.tr('switch_audio'),
+                          style: Theme.of(ctx).textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w800,
+                          ),
                         ),
                       ),
                     ],
@@ -514,7 +532,9 @@ class _SessionCardState extends State<_SessionCard> {
                 else ...[
                   IconButton(
                     icon: const Icon(Icons.skip_previous_rounded, size: 20),
-                    tooltip: '上一首',
+                    tooltip: context.read<AppLanguageProvider>().tr(
+                      'previous_track',
+                    ),
                     onPressed: () => provider.seekSessionToPrev(session.id),
                     visualDensity: VisualDensity.compact,
                   ),
@@ -525,13 +545,18 @@ class _SessionCardState extends State<_SessionCard> {
                           : Icons.play_arrow_rounded,
                       size: 20,
                     ),
-                    tooltip: isPlaying ? '暂停' : '播放',
-                    onPressed: () => provider.toggleSessionPlayPause(session.id),
+                    tooltip: isPlaying
+                        ? context.read<AppLanguageProvider>().tr('pause')
+                        : context.read<AppLanguageProvider>().tr('play'),
+                    onPressed: () =>
+                        provider.toggleSessionPlayPause(session.id),
                     visualDensity: VisualDensity.compact,
                   ),
                   IconButton(
                     icon: const Icon(Icons.skip_next_rounded, size: 20),
-                    tooltip: '下一首',
+                    tooltip: context.read<AppLanguageProvider>().tr(
+                      'next_track',
+                    ),
                     onPressed: () => provider.seekSessionToNext(session.id),
                     visualDensity: VisualDensity.compact,
                   ),
@@ -542,13 +567,17 @@ class _SessionCardState extends State<_SessionCard> {
                     duration: const Duration(milliseconds: 200),
                     child: const Icon(Icons.expand_more_rounded, size: 22),
                   ),
-                  tooltip: _expanded ? '收起' : '展开',
+                  tooltip: _expanded
+                      ? context.read<AppLanguageProvider>().tr('collapse')
+                      : context.read<AppLanguageProvider>().tr('expand'),
                   onPressed: () => setState(() => _expanded = !_expanded),
                   visualDensity: VisualDensity.compact,
                 ),
                 IconButton(
                   icon: const Icon(Icons.close_rounded, size: 20),
-                  tooltip: '结束会话',
+                  tooltip: context.read<AppLanguageProvider>().tr(
+                    'end_session',
+                  ),
                   onPressed: () => provider.removeSession(session.id),
                   visualDensity: VisualDensity.compact,
                 ),
@@ -576,7 +605,9 @@ class _SessionCardState extends State<_SessionCard> {
                             _buildLoopModeButton(
                               context: context,
                               icon: Icons.repeat_one_rounded,
-                              tooltip: '单曲循环',
+                              tooltip: context.read<AppLanguageProvider>().tr(
+                                'single_loop',
+                              ),
                               active: singleLoopEnabled,
                               disabled: false,
                               onPressed: () =>
@@ -588,7 +619,13 @@ class _SessionCardState extends State<_SessionCard> {
                               icon: shuffleEnabled
                                   ? Icons.shuffle_rounded
                                   : Icons.repeat_rounded,
-                              tooltip: shuffleEnabled ? '随机播放' : '顺序播放',
+                              tooltip: shuffleEnabled
+                                  ? context.read<AppLanguageProvider>().tr(
+                                      'random_play',
+                                    )
+                                  : context.read<AppLanguageProvider>().tr(
+                                      'sequential_play',
+                                    ),
                               active: shuffleEnabled,
                               disabled: singleLoopEnabled,
                               onPressed: () =>
@@ -601,13 +638,16 @@ class _SessionCardState extends State<_SessionCard> {
                                   ? Icons.folder_copy_rounded
                                   : Icons.folder_rounded,
                               tooltip: crossFolderEnabled
-                                  ? '跨文件夹播放'
-                                  : '仅当前文件夹',
+                                  ? context.read<AppLanguageProvider>().tr(
+                                      'cross_folder_play',
+                                    )
+                                  : context.read<AppLanguageProvider>().tr(
+                                      'current_folder_only',
+                                    ),
                               active: crossFolderEnabled,
                               disabled: singleLoopEnabled,
-                              onPressed: () => provider.toggleSessionCrossFolder(
-                                session.id,
-                              ),
+                              onPressed: () =>
+                                  provider.toggleSessionCrossFolder(session.id),
                             ),
                             const Spacer(),
                             if (hasSiblings)
@@ -616,7 +656,9 @@ class _SessionCardState extends State<_SessionCard> {
                                   Icons.queue_music_rounded,
                                   size: 18,
                                 ),
-                                tooltip: '切换音频',
+                                tooltip: context.read<AppLanguageProvider>().tr(
+                                  'switch_audio',
+                                ),
                                 visualDensity: VisualDensity.compact,
                                 onPressed: () => _showTrackSwitcher(context),
                               ),
@@ -647,8 +689,10 @@ class _SessionCardState extends State<_SessionCard> {
                                   value: session.volume,
                                   min: 0,
                                   max: 1,
-                                  onChanged: (val) =>
-                                      provider.setSessionVolume(session.id, val),
+                                  onChanged: (val) => provider.setSessionVolume(
+                                    session.id,
+                                    val,
+                                  ),
                                 ),
                               ),
                             ),

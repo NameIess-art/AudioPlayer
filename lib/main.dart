@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:provider/provider.dart';
 
+import 'i18n/app_language_provider.dart';
 import 'providers/audio_provider.dart';
 import 'screens/main_screen.dart';
 import 'theme/theme_provider.dart';
@@ -14,6 +16,7 @@ Future<void> main() async {
     MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => ThemeProvider()),
+        ChangeNotifierProvider(create: (_) => AppLanguageProvider()),
         ChangeNotifierProvider(create: (_) => AudioProvider()),
       ],
       child: const MusicPlayerApp(),
@@ -26,11 +29,18 @@ class MusicPlayerApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<ThemeProvider>(
-      builder: (context, themeProvider, child) {
+    return Consumer2<ThemeProvider, AppLanguageProvider>(
+      builder: (context, themeProvider, languageProvider, child) {
         return MaterialApp(
-          title: '本地音乐播放器',
+          title: languageProvider.tr('app_title'),
           debugShowCheckedModeBanner: false,
+          locale: languageProvider.locale,
+          supportedLocales: AppLanguageProvider.supportedLocales,
+          localizationsDelegates: const [
+            GlobalMaterialLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+          ],
           theme: themeProvider.currentTheme,
           home: const MainScreen(),
         );
