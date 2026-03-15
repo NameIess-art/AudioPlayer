@@ -905,7 +905,8 @@ class AudioProvider with ChangeNotifier {
     _bindSessionListeners(session);
     notifyListeners();
 
-    await _prepareAndPlay(session, nextPath: track.path, autoPlay: false);
+    // Creating a session from library actions should start playback immediately.
+    await _prepareAndPlay(session, nextPath: track.path, autoPlay: true);
     unawaited(_saveSessionState());
     unawaited(_saveSessionOrder());
   }

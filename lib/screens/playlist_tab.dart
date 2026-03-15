@@ -9,8 +9,53 @@ import '../i18n/app_language_provider.dart';
 import '../providers/audio_provider.dart';
 import '../widgets/top_page_header.dart';
 
-class PlaylistTab extends StatelessWidget {
+class PlaylistTab extends StatefulWidget {
   const PlaylistTab({super.key});
+
+  @override
+  State<PlaylistTab> createState() => _PlaylistTabState();
+}
+
+class _PlaylistTabState extends State<PlaylistTab> {
+  late final PageController _pageController;
+  double _pagePosition = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _pageController = PageController(viewportFraction: 0.86);
+    _pageController.addListener(_handlePageScroll);
+  }
+
+  @override
+  void dispose() {
+    _pageController
+      ..removeListener(_handlePageScroll)
+      ..dispose();
+    super.dispose();
+  }
+
+  void _handlePageScroll() {
+    final position = _pageController.page ?? 0;
+    if ((position - _pagePosition).abs() < 0.0001) return;
+    setState(() {
+      _pagePosition = position;
+    });
+  }
+
+  void _ensurePageInRange(int itemCount) {
+    if (itemCount <= 0 || !_pageController.hasClients) return;
+    final currentPage =
+        (_pageController.page ?? _pageController.initialPage.toDouble())
+            .round();
+    final targetPage = currentPage.clamp(0, itemCount - 1);
+    if (targetPage == currentPage) return;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_pageController.hasClients) return;
+      _pageController.jumpToPage(targetPage);
+    });
+  }
 
   Future<void> _confirmClearAll(
     BuildContext context,
@@ -126,17 +171,45 @@ class PlaylistTab extends StatelessWidget {
           Expanded(
             child: sessions.isEmpty
                 ? const _SessionsEmptyState()
-                : ListView.builder(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 132),
-                    itemCount: sessions.length,
-                    addAutomaticKeepAlives: false,
-                    addRepaintBoundaries: true,
-                    itemBuilder: (context, index) {
-                      final session = sessions[index];
-                      return _SessionCard(
-                        key: ValueKey(session.id),
-                        session: session,
-                        provider: provider,
+                : LayoutBuilder(
+                    builder: (context, _) {
+                      _ensurePageInRange(sessions.length);
+                      return PageView.builder(
+                        controller: _pageController,
+                        itemCount: sessions.length,
+                        physics: const BouncingScrollPhysics(),
+                        itemBuilder: (context, index) {
+                          final session = sessions[index];
+                          final distance = (_pagePosition - index).abs();
+                          final scale = (1 - (distance * 0.08)).clamp(0.9, 1.0);
+                          final opacity = (1 - (distance * 0.28)).clamp(
+                            0.62,
+                            1.0,
+                          );
+                          final verticalShift = min(18.0, distance * 16);
+                          final horizontalShift = distance == 0
+                              ? 0.0
+                              : (_pagePosition > index ? -6.0 : 6.0);
+
+                          return Padding(
+                            padding: const EdgeInsets.fromLTRB(2, 4, 2, 132),
+                            child: Transform.translate(
+                              offset: Offset(horizontalShift, verticalShift),
+                              child: Transform.scale(
+                                scale: scale,
+                                child: Opacity(
+                                  opacity: opacity,
+                                  child: _SessionCard(
+                                    key: ValueKey(session.id),
+                                    session: session,
+                                    provider: provider,
+                                    highlighted: distance < 0.56,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          );
+                        },
                       );
                     },
                   ),
@@ -233,25 +306,17 @@ class _SessionsEmptyState extends StatelessWidget {
   }
 }
 
-class _SessionCard extends StatefulWidget {
+class _SessionCard extends StatelessWidget {
   const _SessionCard({
     required super.key,
     required this.session,
     required this.provider,
+    required this.highlighted,
   });
 
   final PlaybackSession session;
   final AudioProvider provider;
-
-  @override
-  State<_SessionCard> createState() => _SessionCardState();
-}
-
-class _SessionCardState extends State<_SessionCard> {
-  bool _expanded = false;
-
-  PlaybackSession get session => widget.session;
-  AudioProvider get provider => widget.provider;
+  final bool highlighted;
 
   bool _isSingleLoop(SessionLoopMode mode) => mode == SessionLoopMode.single;
 
@@ -265,7 +330,7 @@ class _SessionCardState extends State<_SessionCard> {
         mode == SessionLoopMode.crossSequential;
   }
 
-  String _loopModeSummary(SessionLoopMode mode) {
+  String _loopModeSummary(BuildContext context, SessionLoopMode mode) {
     final i18n = context.read<AppLanguageProvider>();
     if (_isSingleLoop(mode)) return i18n.tr('single_loop');
     final scope = _isCrossFolderLoop(mode)
@@ -290,17 +355,19 @@ class _SessionCardState extends State<_SessionCard> {
       onPressed: disabled ? null : onPressed,
       tooltip: tooltip,
       style: IconButton.styleFrom(
-        visualDensity: VisualDensity.compact,
+        minimumSize: const Size(42, 42),
         backgroundColor: active
-            ? cs.primaryContainer
-            : cs.surfaceContainerHighest.withValues(alpha: 0.9),
+            ? cs.primaryContainer.withValues(alpha: 0.94)
+            : cs.surfaceContainerHighest.withValues(alpha: 0.72),
         side: BorderSide(
-          color: active ? cs.primary.withValues(alpha: 0.5) : cs.outlineVariant,
+          color: active
+              ? cs.primary.withValues(alpha: 0.45)
+              : cs.outlineVariant.withValues(alpha: 0.9),
         ),
       ),
       icon: Icon(
         icon,
-        size: 18,
+        size: 19,
         color: disabled
             ? cs.onSurface.withValues(alpha: 0.35)
             : active
@@ -429,7 +496,8 @@ class _SessionCardState extends State<_SessionCard> {
         path.basenameWithoutExtension(session.currentTrackPath);
     final folderName = (track != null && !track.isSingle)
         ? track.groupTitle
-        : null;
+        : context.read<AppLanguageProvider>().tr('imported_files');
+
     final isPlaying = session.state.playing;
     final hasSiblings =
         provider.tracksInSameGroup(session.currentTrackPath).length > 1;
@@ -438,272 +506,263 @@ class _SessionCardState extends State<_SessionCard> {
     final crossFolderEnabled = _isCrossFolderLoop(session.loopMode);
 
     return AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
-      margin: const EdgeInsets.only(bottom: 12),
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
       decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(28),
         border: Border.all(
-          color: isPlaying
-              ? cs.primary.withValues(alpha: 0.65)
-              : cs.outlineVariant,
-          width: isPlaying ? 1.6 : 1,
+          color: isPlaying || highlighted
+              ? cs.primary.withValues(alpha: 0.64)
+              : cs.outlineVariant.withValues(alpha: 0.95),
+          width: isPlaying || highlighted ? 1.9 : 1.2,
+        ),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            cs.surface.withValues(alpha: 0.9),
+            cs.surfaceContainerHigh.withValues(alpha: 0.66),
+          ],
         ),
         boxShadow: [
-          if (isPlaying)
-            BoxShadow(
-              color: cs.primary.withValues(alpha: 0.08),
-              blurRadius: 12,
-              offset: const Offset(0, 4),
-            ),
+          BoxShadow(
+            color: cs.shadow.withValues(alpha: highlighted ? 0.2 : 0.12),
+            blurRadius: highlighted ? 24 : 14,
+            offset: const Offset(0, 10),
+          ),
         ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (folderName != null)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.folder_rounded,
-                    size: 14,
-                    color: cs.onSurfaceVariant,
-                  ),
-                  const SizedBox(width: 5),
-                  Expanded(
-                    child: Text(
-                      folderName,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: cs.onSurfaceVariant,
-                        letterSpacing: 0.2,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          Padding(
-            padding: EdgeInsets.fromLTRB(
-              14,
-              folderName != null ? 6 : 12,
-              8,
-              _expanded ? 4 : 10,
-            ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(18, 16, 18, 14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
               children: [
                 Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  child: Row(
                     children: [
-                      Text(
-                        displayName,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.w800,
-                          color: isPlaying ? cs.primary : null,
-                        ),
+                      Icon(
+                        Icons.folder_rounded,
+                        size: 16,
+                        color: cs.onSurfaceVariant,
                       ),
-                      const SizedBox(height: 4),
-                      Text(
-                        _loopModeSummary(session.loopMode),
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: cs.onSurfaceVariant,
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          folderName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.labelMedium
+                              ?.copyWith(
+                                color: cs.onSurfaceVariant,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.2,
+                              ),
                         ),
                       ),
                     ],
                   ),
                 ),
-                if (session.isLoading)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    child: SizedBox(
-                      width: 22,
-                      height: 22,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                  )
-                else ...[
-                  IconButton(
-                    icon: const Icon(Icons.skip_previous_rounded, size: 20),
-                    tooltip: context.read<AppLanguageProvider>().tr(
-                      'previous_track',
-                    ),
-                    onPressed: () => provider.seekSessionToPrev(session.id),
-                    visualDensity: VisualDensity.compact,
-                  ),
-                  IconButton.filled(
-                    icon: Icon(
-                      isPlaying
-                          ? Icons.pause_rounded
-                          : Icons.play_arrow_rounded,
-                      size: 20,
-                    ),
-                    tooltip: isPlaying
-                        ? context.read<AppLanguageProvider>().tr('pause')
-                        : context.read<AppLanguageProvider>().tr('play'),
-                    onPressed: () =>
-                        provider.toggleSessionPlayPause(session.id),
-                    visualDensity: VisualDensity.compact,
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.skip_next_rounded, size: 20),
-                    tooltip: context.read<AppLanguageProvider>().tr(
-                      'next_track',
-                    ),
-                    onPressed: () => provider.seekSessionToNext(session.id),
-                    visualDensity: VisualDensity.compact,
-                  ),
-                ],
                 IconButton(
-                  icon: AnimatedRotation(
-                    turns: _expanded ? 0.5 : 0,
-                    duration: const Duration(milliseconds: 200),
-                    child: const Icon(Icons.expand_more_rounded, size: 22),
-                  ),
-                  tooltip: _expanded
-                      ? context.read<AppLanguageProvider>().tr('collapse')
-                      : context.read<AppLanguageProvider>().tr('expand'),
-                  onPressed: () => setState(() => _expanded = !_expanded),
-                  visualDensity: VisualDensity.compact,
-                ),
-                IconButton(
-                  icon: const Icon(Icons.close_rounded, size: 20),
+                  onPressed: () => provider.removeSession(session.id),
                   tooltip: context.read<AppLanguageProvider>().tr(
                     'end_session',
                   ),
-                  onPressed: () => provider.removeSession(session.id),
-                  visualDensity: VisualDensity.compact,
+                  style: IconButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  icon: const Icon(Icons.close_rounded, size: 20),
                 ),
               ],
             ),
-          ),
-          AnimatedSize(
-            duration: const Duration(milliseconds: 220),
-            curve: Curves.easeOutCubic,
-            child: _expanded
-                ? Padding(
-                    padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Divider(height: 12, color: cs.outlineVariant),
-                        _ProgressBar(
-                          player: session.player,
-                          sessionId: session.id,
-                          provider: provider,
-                        ),
-                        const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            _buildLoopModeButton(
-                              context: context,
-                              icon: Icons.repeat_one_rounded,
-                              tooltip: context.read<AppLanguageProvider>().tr(
-                                'single_loop',
-                              ),
-                              active: singleLoopEnabled,
-                              disabled: false,
-                              onPressed: () =>
-                                  provider.toggleSessionSingleLoop(session.id),
-                            ),
-                            const SizedBox(width: 6),
-                            _buildLoopModeButton(
-                              context: context,
-                              icon: shuffleEnabled
-                                  ? Icons.shuffle_rounded
-                                  : Icons.repeat_rounded,
-                              tooltip: shuffleEnabled
-                                  ? context.read<AppLanguageProvider>().tr(
-                                      'random_play',
-                                    )
-                                  : context.read<AppLanguageProvider>().tr(
-                                      'sequential_play',
-                                    ),
-                              active: shuffleEnabled,
-                              disabled: singleLoopEnabled,
-                              onPressed: () =>
-                                  provider.toggleSessionShuffle(session.id),
-                            ),
-                            const SizedBox(width: 6),
-                            _buildLoopModeButton(
-                              context: context,
-                              icon: crossFolderEnabled
-                                  ? Icons.folder_copy_rounded
-                                  : Icons.folder_rounded,
-                              tooltip: crossFolderEnabled
-                                  ? context.read<AppLanguageProvider>().tr(
-                                      'cross_folder_play',
-                                    )
-                                  : context.read<AppLanguageProvider>().tr(
-                                      'current_folder_only',
-                                    ),
-                              active: crossFolderEnabled,
-                              disabled: singleLoopEnabled,
-                              onPressed: () =>
-                                  provider.toggleSessionCrossFolder(session.id),
-                            ),
-                            const Spacer(),
-                            if (hasSiblings)
-                              IconButton.outlined(
-                                icon: const Icon(
-                                  Icons.queue_music_rounded,
-                                  size: 18,
-                                ),
-                                tooltip: context.read<AppLanguageProvider>().tr(
-                                  'switch_audio',
-                                ),
-                                visualDensity: VisualDensity.compact,
-                                onPressed: () => _showTrackSwitcher(context),
-                              ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            Icon(
-                              session.volume == 0
-                                  ? Icons.volume_off_rounded
-                                  : Icons.volume_down_rounded,
-                              size: 18,
-                              color: cs.onSurfaceVariant,
-                            ),
-                            Expanded(
-                              child: SliderTheme(
-                                data: SliderTheme.of(context).copyWith(
-                                  trackHeight: 2.5,
-                                  thumbShape: const RoundSliderThumbShape(
-                                    enabledThumbRadius: 5,
-                                  ),
-                                  overlayShape: const RoundSliderOverlayShape(
-                                    overlayRadius: 10,
-                                  ),
-                                ),
-                                child: Slider(
-                                  value: session.volume,
-                                  min: 0,
-                                  max: 1,
-                                  onChanged: (val) => provider.setSessionVolume(
-                                    session.id,
-                                    val,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
+            const SizedBox(height: 8),
+            Text(
+              displayName,
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                fontWeight: FontWeight.w800,
+                fontSize: 30,
+                color: isPlaying ? cs.primary : cs.onSurface,
+                height: 1.08,
+              ),
+            ),
+            const SizedBox(height: 7),
+            Text(
+              _loopModeSummary(context, session.loopMode),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: cs.onSurfaceVariant,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const Spacer(),
+            if (session.isLoading)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 12),
+                child: Center(
+                  child: SizedBox(
+                    width: 28,
+                    height: 28,
+                    child: CircularProgressIndicator(strokeWidth: 2.4),
+                  ),
+                ),
+              )
+            else
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    IconButton.filledTonal(
+                      onPressed: () => provider.seekSessionToPrev(session.id),
+                      icon: const Icon(Icons.skip_previous_rounded, size: 26),
+                      tooltip: context.read<AppLanguageProvider>().tr(
+                        'previous_track',
+                      ),
+                      style: IconButton.styleFrom(
+                        minimumSize: const Size(52, 52),
+                      ),
                     ),
-                  )
-                : const SizedBox.shrink(),
-          ),
-        ],
+                    const SizedBox(width: 14),
+                    SizedBox(
+                      width: 74,
+                      height: 74,
+                      child: FilledButton(
+                        onPressed: () =>
+                            provider.toggleSessionPlayPause(session.id),
+                        style: FilledButton.styleFrom(
+                          shape: const CircleBorder(),
+                          padding: EdgeInsets.zero,
+                          backgroundColor: cs.primary,
+                          foregroundColor: cs.onPrimary,
+                        ),
+                        child: Icon(
+                          isPlaying
+                              ? Icons.pause_rounded
+                              : Icons.play_arrow_rounded,
+                          size: 40,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    IconButton.filledTonal(
+                      onPressed: () => provider.seekSessionToNext(session.id),
+                      icon: const Icon(Icons.skip_next_rounded, size: 26),
+                      tooltip: context.read<AppLanguageProvider>().tr(
+                        'next_track',
+                      ),
+                      style: IconButton.styleFrom(
+                        minimumSize: const Size(52, 52),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            const SizedBox(height: 10),
+            _ProgressBar(
+              player: session.player,
+              sessionId: session.id,
+              provider: provider,
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              alignment: WrapAlignment.center,
+              children: [
+                _buildLoopModeButton(
+                  context: context,
+                  icon: Icons.repeat_one_rounded,
+                  tooltip: context.read<AppLanguageProvider>().tr(
+                    'single_loop',
+                  ),
+                  active: singleLoopEnabled,
+                  disabled: false,
+                  onPressed: () => provider.toggleSessionSingleLoop(session.id),
+                ),
+                _buildLoopModeButton(
+                  context: context,
+                  icon: shuffleEnabled
+                      ? Icons.shuffle_rounded
+                      : Icons.repeat_rounded,
+                  tooltip: shuffleEnabled
+                      ? context.read<AppLanguageProvider>().tr('random_play')
+                      : context.read<AppLanguageProvider>().tr(
+                          'sequential_play',
+                        ),
+                  active: shuffleEnabled,
+                  disabled: singleLoopEnabled,
+                  onPressed: () => provider.toggleSessionShuffle(session.id),
+                ),
+                _buildLoopModeButton(
+                  context: context,
+                  icon: crossFolderEnabled
+                      ? Icons.folder_copy_rounded
+                      : Icons.folder_rounded,
+                  tooltip: crossFolderEnabled
+                      ? context.read<AppLanguageProvider>().tr(
+                          'cross_folder_play',
+                        )
+                      : context.read<AppLanguageProvider>().tr(
+                          'current_folder_only',
+                        ),
+                  active: crossFolderEnabled,
+                  disabled: singleLoopEnabled,
+                  onPressed: () =>
+                      provider.toggleSessionCrossFolder(session.id),
+                ),
+                if (hasSiblings)
+                  IconButton(
+                    onPressed: () => _showTrackSwitcher(context),
+                    tooltip: context.read<AppLanguageProvider>().tr(
+                      'switch_audio',
+                    ),
+                    style: IconButton.styleFrom(
+                      minimumSize: const Size(42, 42),
+                      backgroundColor: cs.surfaceContainerHighest.withValues(
+                        alpha: 0.72,
+                      ),
+                      side: BorderSide(color: cs.outlineVariant),
+                    ),
+                    icon: const Icon(Icons.queue_music_rounded, size: 19),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Icon(
+                  session.volume == 0
+                      ? Icons.volume_off_rounded
+                      : Icons.volume_down_rounded,
+                  size: 20,
+                  color: cs.onSurfaceVariant,
+                ),
+                Expanded(
+                  child: SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      trackHeight: 3,
+                      thumbShape: const RoundSliderThumbShape(
+                        enabledThumbRadius: 6,
+                      ),
+                      overlayShape: const RoundSliderOverlayShape(
+                        overlayRadius: 12,
+                      ),
+                    ),
+                    child: Slider(
+                      value: session.volume,
+                      min: 0,
+                      max: 1,
+                      onChanged: (val) =>
+                          provider.setSessionVolume(session.id, val),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -769,13 +828,13 @@ class _ProgressBar extends StatelessWidget {
                         _fmt(position),
                         style: Theme.of(
                           context,
-                        ).textTheme.bodySmall?.copyWith(fontSize: 11),
+                        ).textTheme.bodySmall?.copyWith(fontSize: 12),
                       ),
                       Text(
                         _fmt(duration),
                         style: Theme.of(
                           context,
-                        ).textTheme.bodySmall?.copyWith(fontSize: 11),
+                        ).textTheme.bodySmall?.copyWith(fontSize: 12),
                       ),
                     ],
                   ),

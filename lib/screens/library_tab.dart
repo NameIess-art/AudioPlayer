@@ -915,13 +915,6 @@ class _AdaptiveNameText extends StatelessWidget {
       softWrap: true,
       overflow: TextOverflow.ellipsis,
       style: style,
-      overflowReplacement: Text(
-        text,
-        maxLines: maxLines,
-        softWrap: true,
-        overflow: TextOverflow.ellipsis,
-        style: style?.copyWith(fontSize: 11),
-      ),
     );
   }
 }
