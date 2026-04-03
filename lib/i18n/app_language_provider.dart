@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+
+import '../services/app_preferences.dart';
 
 enum AppLanguage { zh, ja, en }
 
@@ -42,13 +43,11 @@ class AppLanguageProvider with ChangeNotifier {
     if (_language == language) return;
     _language = language;
     notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_prefsKey, language.name);
+    await AppPreferences.setString(_prefsKey, language.name);
   }
 
   Future<void> _loadLanguage() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_prefsKey);
+    final raw = await AppPreferences.getString(_prefsKey);
     final match = AppLanguage.values.where((e) => e.name == raw);
     if (match.isNotEmpty) {
       _language = match.first;
@@ -143,6 +142,11 @@ const Map<AppLanguage, Map<String, String>> _localizedValues = {
     'current_folder_only': '仅当前文件夹',
     'dark_mode': '深色模式',
     'dark_mode_subtitle': '夜间使用更低眩光的配色。',
+    'multi_thread_playback': '多线程播放',
+    'multi_thread_playback_subtitle': '开启后可同时播放多首音频；关闭后始终只保留一个播放会话。',
+    'background_keep_alive': '后台保活',
+    'background_keep_alive_subtitle': '打开系统电池优化白名单，降低息屏后被系统限制或暂停播放的概率。',
+    'background_keep_alive_ready': '系统已允许后台保活，息屏播放会更稳定。',
     'clear_temp_cache': '清理临时缓存',
     'clear_temp_cache_subtitle': '删除导入过程中生成的临时文件。',
     'temp_cache_cleaned': '临时缓存已清理。',
@@ -198,6 +202,12 @@ const Map<AppLanguage, Map<String, String>> _localizedValues = {
     'current_params': '当前参数：{value}',
     'format_auto_encode': '格式自动编码',
     'cancel_conversion': '取消转换',
+    'notification_permission_title': '开启通知权限',
+    'notification_permission_message':
+        '当前系统没有允许本应用显示通知，所以播放通知栏不会出现。请打开应用通知权限和媒体通知开关。',
+    'notification_permission_enabled': '通知权限已开启。',
+    'go_settings': '去设置',
+    'later': '稍后',
     'start_conversion': '开始转换',
   },
   AppLanguage.ja: {
@@ -275,6 +285,11 @@ const Map<AppLanguage, Map<String, String>> _localizedValues = {
     'current_folder_only': '現在フォルダのみ',
     'dark_mode': 'ダークモード',
     'dark_mode_subtitle': '夜間に眩しさを抑えた配色を使います。',
+    'multi_thread_playback': 'マルチスレッド再生',
+    'multi_thread_playback_subtitle': 'オンにすると複数音声を同時再生し、オフでは再生セッションを1つだけ保持します。',
+    'background_keep_alive': 'バックグラウンド保持',
+    'background_keep_alive_subtitle': '電池の最適化対象外にして、画面オフ時の停止や制限を減らします。',
+    'background_keep_alive_ready': 'バックグラウンド保持の許可は有効です。画面オフ再生がより安定します。',
     'clear_temp_cache': '一時キャッシュを削除',
     'clear_temp_cache_subtitle': '取り込み時に作成された一時ファイルを削除します。',
     'temp_cache_cleaned': '一時キャッシュを削除しました。',
@@ -330,6 +345,12 @@ const Map<AppLanguage, Map<String, String>> _localizedValues = {
     'current_params': '現在の設定：{value}',
     'format_auto_encode': '形式自動エンコード',
     'cancel_conversion': '変換をキャンセル',
+    'notification_permission_title': '通知権限を有効化',
+    'notification_permission_message':
+        'このアプリの通知がシステムで無効になっているため、再生通知は表示されません。アプリ通知とメディア通知を有効にしてください。',
+    'notification_permission_enabled': '通知権限が有効になりました。',
+    'go_settings': '設定を開く',
+    'later': 'あとで',
     'start_conversion': '変換開始',
   },
   AppLanguage.en: {
@@ -413,6 +434,14 @@ const Map<AppLanguage, Map<String, String>> _localizedValues = {
     'current_folder_only': 'Current folder only',
     'dark_mode': 'Dark mode',
     'dark_mode_subtitle': 'Use a lower-glare palette at night.',
+    'multi_thread_playback': 'Multi-thread playback',
+    'multi_thread_playback_subtitle':
+        'When on, multiple tracks can play together. When off, only one playback session is kept.',
+    'background_keep_alive': 'Background keep-alive',
+    'background_keep_alive_subtitle':
+        'Open battery optimization settings to reduce screen-off playback pauses and OEM restrictions.',
+    'background_keep_alive_ready':
+        'Battery optimization is already disabled for this app. Screen-off playback should be more stable.',
     'clear_temp_cache': 'Clear temp cache',
     'clear_temp_cache_subtitle':
         'Delete temporary files created during import.',
@@ -474,6 +503,12 @@ const Map<AppLanguage, Map<String, String>> _localizedValues = {
     'current_params': 'Current params: {value}',
     'format_auto_encode': 'Format auto encoding',
     'cancel_conversion': 'Cancel conversion',
+    'notification_permission_title': 'Enable notifications',
+    'notification_permission_message':
+        'System notifications are disabled for this app, so playback notifications cannot appear. Please enable app notifications and media notifications.',
+    'notification_permission_enabled': 'Notifications are now enabled.',
+    'go_settings': 'Open settings',
+    'later': 'Later',
     'start_conversion': 'Start conversion',
   },
 };

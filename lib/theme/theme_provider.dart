@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+
+import '../services/app_preferences.dart';
 
 class ThemeProvider with ChangeNotifier {
   bool _isDarkMode = false;
@@ -11,76 +12,77 @@ class ThemeProvider with ChangeNotifier {
   }
 
   Future<void> _loadTheme() async {
-    final prefs = await SharedPreferences.getInstance();
-    _isDarkMode = prefs.getBool('isDarkMode') ?? false;
+    _isDarkMode = await AppPreferences.getBool('isDarkMode') ?? false;
     notifyListeners();
   }
 
   Future<void> toggleTheme(bool value) async {
     _isDarkMode = value;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('isDarkMode', value);
+    await AppPreferences.setBool('isDarkMode', value);
     notifyListeners();
   }
 
   static final ColorScheme _lightScheme =
       ColorScheme.fromSeed(
-        seedColor: const Color(0xFF757575),
+        seedColor: const Color(0xFF6C7B8B),
         brightness: Brightness.light,
       ).copyWith(
-        primary: const Color(0xFF1F1F1F),
+        primary: const Color(0xFF1B222E),
         onPrimary: Colors.white,
-        secondary: const Color(0xFF4B4B4B),
+        secondary: const Color(0xFF4A5568),
         onSecondary: Colors.white,
-        tertiary: const Color(0xFF6A6A6A),
+        tertiary: const Color(0xFF5A6B7C),
         onTertiary: Colors.white,
-        surface: const Color(0xFFF5F5F5),
-        onSurface: const Color(0xFF111111),
-        surfaceContainerHighest: const Color(0xFFE0E0E0),
-        surfaceContainerHigh: const Color(0xFFECECEC),
-        primaryContainer: const Color(0xFFD6D6D6),
-        onPrimaryContainer: const Color(0xFF141414),
-        secondaryContainer: const Color(0xFFDDDDDD),
-        onSecondaryContainer: const Color(0xFF1D1D1D),
-        outline: const Color(0xFF7A7A7A),
-        outlineVariant: const Color(0xFFC6C6C6),
+        surface: const Color(0xFFF7F9FB),
+        onSurface: const Color(0xFF131821),
+        surfaceContainerHighest: const Color(0xFFE2E8F0),
+        surfaceContainerHigh: const Color(0xFFEDF2F7),
+        primaryContainer: const Color(0xFFD3DEF2),
+        onPrimaryContainer: const Color(0xFF161F2C),
+        secondaryContainer: const Color(0xFFE2E8F0),
+        onSecondaryContainer: const Color(0xFF1A212E),
+        outline: const Color(0xFF7A899E),
+        outlineVariant: const Color(0xFFCBD5E1),
       );
 
   static final ColorScheme _darkScheme =
       ColorScheme.fromSeed(
-        seedColor: const Color(0xFF8A8A8A),
+        seedColor: const Color(0xFF90A4AE),
         brightness: Brightness.dark,
       ).copyWith(
-        primary: const Color(0xFFF0F0F0),
-        onPrimary: const Color(0xFF111111),
-        secondary: const Color(0xFFC7C7C7),
-        onSecondary: const Color(0xFF121212),
-        tertiary: const Color(0xFFAEAEAE),
-        onTertiary: const Color(0xFF121212),
-        surface: const Color(0xFF0D0D0D),
-        onSurface: const Color(0xFFF2F2F2),
-        surfaceContainerHighest: const Color(0xFF262626),
-        surfaceContainerHigh: const Color(0xFF1A1A1A),
-        primaryContainer: const Color(0xFF333333),
-        onPrimaryContainer: const Color(0xFFF2F2F2),
-        secondaryContainer: const Color(0xFF2B2B2B),
-        onSecondaryContainer: const Color(0xFFE5E5E5),
-        outline: const Color(0xFF8C8C8C),
-        outlineVariant: const Color(0xFF3A3A3A),
+        primary: const Color(0xFFF1F5F9),
+        onPrimary: const Color(0xFF0F172A),
+        secondary: const Color(0xFFCBD5E1),
+        onSecondary: const Color(0xFF131C2D),
+        tertiary: const Color(0xFFB0BEC5),
+        onTertiary: const Color(0xFF111827),
+        surface: const Color(0xFF080D14),
+        onSurface: const Color(0xFFF5F7FA),
+        surfaceContainerHighest: const Color(0xFF1E293B),
+        surfaceContainerHigh: const Color(0xFF131B28),
+        primaryContainer: const Color(0xFF2E3E53),
+        onPrimaryContainer: const Color(0xFFF1F5F9),
+        secondaryContainer: const Color(0xFF263345),
+        onSecondaryContainer: const Color(0xFFE2E8F0),
+        outline: const Color(0xFF64748B),
+        outlineVariant: const Color(0xFF334155),
       );
 
   ThemeData _buildTheme(ColorScheme scheme) {
     final bodyText = GoogleFonts.ralewayTextTheme().copyWith(
-      bodyMedium: GoogleFonts.raleway(fontSize: 16, height: 1.52),
-      bodyLarge: GoogleFonts.raleway(fontSize: 17, height: 1.52),
+      bodyMedium: GoogleFonts.raleway(fontSize: 14, height: 1.5),
+      bodyLarge: GoogleFonts.raleway(fontSize: 15, height: 1.5),
       labelLarge: GoogleFonts.raleway(
-        fontSize: 14,
+        fontSize: 12,
         fontWeight: FontWeight.w700,
-        letterSpacing: 0.2,
+        letterSpacing: 0.1,
       ),
-      titleMedium: GoogleFonts.raleway(fontWeight: FontWeight.w700),
-      titleLarge: GoogleFonts.lora(fontWeight: FontWeight.w700),
-      headlineSmall: GoogleFonts.lora(fontWeight: FontWeight.w700),
+      labelMedium: GoogleFonts.raleway(fontSize: 10, fontWeight: FontWeight.w600),
+      labelSmall: GoogleFonts.raleway(fontSize: 9.5, fontWeight: FontWeight.w600),
+      bodySmall: GoogleFonts.raleway(fontSize: 10, fontWeight: FontWeight.w500),
+      titleMedium: GoogleFonts.raleway(fontWeight: FontWeight.w800, fontSize: 14, height: 1.25),
+      titleLarge: GoogleFonts.lora(fontWeight: FontWeight.w800, fontSize: 18),
+      headlineSmall: GoogleFonts.lora(fontWeight: FontWeight.w900, fontSize: 20),
     );
 
     final largeShape = RoundedRectangleBorder(
@@ -94,10 +96,19 @@ class ThemeProvider with ChangeNotifier {
         bodyColor: scheme.onSurface,
         displayColor: scheme.onSurface,
       ),
+      pageTransitionsTheme: const PageTransitionsTheme(
+        builders: {
+          TargetPlatform.android: FadeUpwardsPageTransitionsBuilder(),
+          TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
+          TargetPlatform.linux: FadeUpwardsPageTransitionsBuilder(),
+          TargetPlatform.macOS: CupertinoPageTransitionsBuilder(),
+          TargetPlatform.windows: FadeUpwardsPageTransitionsBuilder(),
+        },
+      ),
       scaffoldBackgroundColor: scheme.surface,
       canvasColor: scheme.surface,
       dividerColor: scheme.outlineVariant,
-      splashFactory: InkSparkle.splashFactory,
+      splashFactory: InkRipple.splashFactory,
       cardTheme: CardThemeData(
         color: scheme.surfaceContainerHigh,
         elevation: 0,
@@ -142,7 +153,24 @@ class ThemeProvider with ChangeNotifier {
         ),
       ),
       iconButtonTheme: IconButtonThemeData(
-        style: IconButton.styleFrom(minimumSize: const Size(44, 44)),
+        style: IconButton.styleFrom(
+          minimumSize: const Size(44, 44),
+          visualDensity: VisualDensity.standard,
+        ),
+      ),
+      sliderTheme: SliderThemeData(
+        trackHeight: 4,
+        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 9),
+        overlayShape: const RoundSliderOverlayShape(overlayRadius: 18),
+        activeTrackColor: scheme.primary,
+        inactiveTrackColor: scheme.outlineVariant.withValues(alpha: 0.55),
+        thumbColor: scheme.primary,
+        overlayColor: scheme.primary.withValues(alpha: 0.12),
+      ),
+      listTileTheme: ListTileThemeData(
+        dense: false,
+        minLeadingWidth: 24,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),
       floatingActionButtonTheme: FloatingActionButtonThemeData(
         backgroundColor: scheme.primaryContainer,

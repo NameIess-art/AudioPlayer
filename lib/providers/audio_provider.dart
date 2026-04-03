@@ -1,6 +1,10 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
+import 'package:audio_session/audio_session.dart';
+import 'package:audio_service/audio_service.dart';
 import 'package:flutter/foundation.dart';
 
 import 'package:flutter/material.dart';
@@ -8,6 +12,9 @@ import 'package:flutter/services.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path/path.dart' as path;
+
+import '../services/playback_notification_handler.dart';
+import '../services/subtitle_parser.dart';
 
 enum SessionLoopMode {
   single,
@@ -23,15 +30,15 @@ extension SessionLoopModeExtension on SessionLoopMode {
   String get label {
     switch (this) {
       case SessionLoopMode.single:
-        return '单曲循环';
+        return 'Single loop';
       case SessionLoopMode.crossRandom:
-        return '随机循环（跨文件夹）';
+        return 'Shuffle (cross-folder)';
       case SessionLoopMode.folderSequential:
-        return '顺序循环（当前文件夹）';
+        return 'Sequential (current folder)';
       case SessionLoopMode.crossSequential:
-        return '顺序循环（跨文件夹）';
+        return 'Sequential (cross-folder)';
       case SessionLoopMode.folderRandom:
-        return '随机循环（当前文件夹）';
+        return 'Shuffle (current folder)';
     }
   }
 }
@@ -82,12 +89,26 @@ class FolderNode extends LibraryNode {
   final String name;
   @override
   final String path;
+  final int depth;
   final List<LibraryNode> children = [];
+  List<MusicTrack>? _allTracksCache;
+  MusicTrack? _firstTrackCache;
+  int? _cachedTotalTrackCount;
+  int? _cachedLeafFolderCount;
 
-  FolderNode(this.name, this.path);
+  FolderNode(this.name, this.path, {this.depth = 0});
+
+  bool get isModuleNode {
+    return depth == 0;
+  }
 
   /// Recursively get all tracks inside this folder
   List<MusicTrack> get allTracks {
+    final cached = _allTracksCache;
+    if (cached != null) {
+      return cached;
+    }
+
     final list = <MusicTrack>[];
     for (final child in children) {
       if (child is TrackNode) {
@@ -96,16 +117,50 @@ class FolderNode extends LibraryNode {
         list.addAll(child.allTracks);
       }
     }
+    _allTracksCache = list;
     return list;
   }
 
+  MusicTrack? get firstTrack {
+    final cached = _firstTrackCache;
+    if (cached != null) {
+      return cached;
+    }
+
+    for (final child in children) {
+      if (child is TrackNode) {
+        _firstTrackCache = child.track;
+        return child.track;
+      }
+      if (child is FolderNode) {
+        final nested = child.firstTrack;
+        if (nested != null) {
+          _firstTrackCache = nested;
+          return nested;
+        }
+      }
+    }
+    return null;
+  }
+
+  int get totalTrackCount => _cachedTotalTrackCount ?? allTracks.length;
+
   int get leafFolderCount {
-    final childFolders = children.whereType<FolderNode>().toList();
-    if (childFolders.isEmpty) return 1;
-    return childFolders.fold<int>(
-      0,
-      (total, folder) => total + folder.leafFolderCount,
-    );
+    return _cachedLeafFolderCount ??
+        children.whereType<FolderNode>().fold<int>(
+          0,
+          (total, folder) => total + folder.leafFolderCount,
+        );
+  }
+
+  void cacheTreeMetrics({
+    required int totalTrackCount,
+    required int leafFolderCount,
+    required MusicTrack? firstTrack,
+  }) {
+    _cachedTotalTrackCount = totalTrackCount;
+    _cachedLeafFolderCount = leafFolderCount;
+    _firstTrackCache = firstTrack;
   }
 }
 
@@ -117,6 +172,16 @@ class TrackNode extends LibraryNode {
   String get name => track.displayName;
   @override
   String get path => track.path;
+}
+
+class _LibraryTreeSnapshot {
+  const _LibraryTreeSnapshot({
+    required this.tree,
+    required this.leafFolderCount,
+  });
+
+  final List<LibraryNode> tree;
+  final int leafFolderCount;
 }
 
 class PlaybackSession {
@@ -164,17 +229,53 @@ const _kGroupOrderKey = 'group_order_v1';
 const _kSessionOrderKey = 'session_order_v1';
 const _kWatchedFoldersKey = 'watched_folders_v1';
 const _kTimerSettingsKey = 'timer_settings_v1';
+const _kTimerRuntimeKey = 'timer_runtime_v1';
 const _kConverterSettingsKey = 'converter_settings_v1';
+const _kPlaybackSettingsKey = 'playback_settings_v1';
 
 class AudioProvider with ChangeNotifier {
+  static const Set<String> _supportedImageExtensions = {
+    '.jpg',
+    '.jpeg',
+    '.png',
+    '.webp',
+    '.bmp',
+    '.gif',
+  };
+  static const Duration _notificationProgressRefreshInterval = Duration(
+    milliseconds: 750,
+  );
   static const MethodChannel _powerChannel = MethodChannel(
     'music_player/power',
   );
+  static const MethodChannel _fileCacheChannel = MethodChannel(
+    'music_player/file_cache',
+  );
+  static const MethodChannel _notificationsChannel = MethodChannel(
+    'music_player/notifications',
+  );
+  final PlaybackNotificationHandler _notificationHandler;
   final List<MusicTrack> _library = [];
+  final Map<String, MusicTrack> _libraryByPath = {};
+  final Map<String, List<MusicTrack>> _tracksByGroup = {};
+  List<MusicTrack> _sortedLibraryTracks = const <MusicTrack>[];
   final Map<String, PlaybackSession> _sessions = {};
+  final Map<String, Future<SubtitleTrack?>> _subtitleTrackFutures = {};
+  final Map<String, SubtitleTrack?> _subtitleTracks = {};
+  final Map<String, String?> _notificationSubtitleTexts = {};
+  final Map<String, String> _notificationSubtitleTrackPaths = {};
+  final Map<String, Future<String?>> _coverPathFutures = {};
+  final Map<String, String?> _resolvedCoverPaths = {};
+  final Map<String, Future<String?>> _notificationCoverPathFutures = {};
+  final Map<String, String?> _resolvedNotificationCoverPaths = {};
+  String? _notificationFocusSessionId;
+  String? _unifiedNotificationSyncKey;
+  Timer? _notificationProgressRefreshTimer;
+  String? _queuedNotificationRefreshSessionId;
 
   // Ordered list of groupKeys (for drag-reorder persistence)
   final List<String> _groupOrder = [];
+  final Set<String> _groupOrderSet = <String>{};
   // Ordered list of sessionIds (for drag-reorder persistence, newest-first)
   final List<String> _sessionOrder = [];
   // Paths of folder roots selected by the user (watched for auto-rescan)
@@ -183,6 +284,7 @@ class AudioProvider with ChangeNotifier {
   // Video conversion settings (configured from Settings tab).
   String _converterFormat = 'mp3';
   String _converterBitrate = '320k';
+  bool _multiThreadPlaybackEnabled = false;
 
   static const List<String> converterFormats = [
     'mp3',
@@ -197,6 +299,12 @@ class AudioProvider with ChangeNotifier {
     '256k',
     '320k',
   ];
+  static const String _androidNotificationGroupKey =
+      'com.example.music_player.PLAYBACK_GROUP';
+  static const String _androidGroupSummaryKey = 'android_group_summary';
+  static const String _androidSummaryTitleKey = 'android_summary_title';
+  static const String _androidSummaryTextKey = 'android_summary_text';
+  static const String _androidSummaryLinesKey = 'android_summary_lines';
 
   int _sessionSeed = 0;
   bool _isScanning = false;
@@ -210,7 +318,19 @@ class AudioProvider with ChangeNotifier {
   Duration? _timerRemaining;
   DateTime? _timerEndsAt;
   Timer? _countdownTimer;
+  bool _timerWaitingForPlayback = false;
+  int _timerGeneration = 0;
   bool _keepCpuAwake = false;
+  bool _keepAliveHasPlayback = false;
+  bool _keepAliveHasTimer = false;
+  bool _activeSessionsDirty = true;
+  List<PlaybackSession> _activeSessionsCache = const <PlaybackSession>[];
+  bool _libraryTreeDirty = true;
+  List<LibraryNode> _cachedLibraryTree = const <LibraryNode>[];
+  int _cachedLibraryLeafFolderCount = 0;
+  Timer? _saveSessionStateTimer;
+  Timer? _saveSessionOrderTimer;
+  Future<void> _sessionPreparationQueue = Future<void>.value();
 
   // Tracks paused when the timer expired (for auto-resume)
   final List<String> _pausedByTimerPaths = [];
@@ -220,6 +340,7 @@ class AudioProvider with ChangeNotifier {
   int _autoResumeHour = 7;
   int _autoResumeMinute = 0;
   Timer? _autoResumeTimer;
+  DateTime? _autoResumeAt;
 
   // Getters
   TimerMode? get timerMode => _timerMode;
@@ -232,27 +353,57 @@ class AudioProvider with ChangeNotifier {
   List<String> get pausedByTimerPaths => List.unmodifiable(_pausedByTimerPaths);
   String get converterFormat => _converterFormat;
   String get converterBitrate => _converterBitrate;
+  bool get multiThreadPlaybackEnabled => _multiThreadPlaybackEnabled;
 
-  List<MusicTrack> get library => _library;
+  List<MusicTrack> get library => List.unmodifiable(_library);
+  int get libraryTrackCount => _library.length;
   List<String> get watchedFolders => List.unmodifiable(_watchedFolders);
+  int get watchedFolderCount => _watchedFolders.length;
+  List<LibraryNode> get libraryTree {
+    if (_libraryTreeDirty) {
+      final snapshot = _buildLibraryTreeSnapshot();
+      _cachedLibraryTree = snapshot.tree;
+      _cachedLibraryLeafFolderCount = snapshot.leafFolderCount;
+      _libraryTreeDirty = false;
+    }
+    return _cachedLibraryTree;
+  }
+
+  int get libraryLeafFolderCount {
+    if (_libraryTreeDirty) {
+      final _ = libraryTree;
+    }
+    return _cachedLibraryLeafFolderCount;
+  }
+
+  int get playingSessionCount =>
+      _sessions.values.where((session) => session.state.playing).length;
 
   List<PlaybackSession> get activeSessions {
-    // Return sessions in _sessionOrder, newest-first for any not yet in order
-    final result = <PlaybackSession>[];
-    for (final id in _sessionOrder) {
-      final s = _sessions[id];
-      if (s != null) result.add(s);
+    if (_activeSessionsDirty) {
+      final result = <PlaybackSession>[];
+      for (final id in _sessionOrder) {
+        final session = _sessions[id];
+        if (session != null) {
+          result.add(session);
+        }
+      }
+      for (final session in _sessions.values) {
+        if (!_sessionOrder.contains(session.id)) {
+          result.add(session);
+        }
+      }
+      _activeSessionsCache = List<PlaybackSession>.unmodifiable(result);
+      _activeSessionsDirty = false;
     }
-    // Any sessions not in _sessionOrder (shouldn't normally happen, but be safe)
-    for (final s in _sessions.values) {
-      if (!_sessionOrder.contains(s.id)) result.add(s);
-    }
-    return result;
+    return _activeSessionsCache;
   }
 
   bool get isScanning => _isScanning;
 
-  AudioProvider() {
+  AudioProvider({required PlaybackNotificationHandler notificationHandler})
+    : _notificationHandler = notificationHandler {
+    _bindNotificationHandler();
     _loadData();
   }
 
@@ -260,12 +411,667 @@ class AudioProvider with ChangeNotifier {
   void dispose() {
     _countdownTimer?.cancel();
     _autoResumeTimer?.cancel();
-    unawaited(_setKeepCpuAwake(false));
+    _saveSessionStateTimer?.cancel();
+    _saveSessionOrderTimer?.cancel();
+    _notificationProgressRefreshTimer?.cancel();
+    unawaited(
+      _setKeepCpuAwake(false, hasActivePlayback: false, hasActiveTimer: false),
+    );
+    unawaited(_deactivateAudioSession());
     for (final session in _sessions.values) {
       session.dispose();
     }
     _sessions.clear();
     super.dispose();
+  }
+
+  void _markActiveSessionsDirty() {
+    _activeSessionsDirty = true;
+  }
+
+  void _markLibraryStructureDirty() {
+    _libraryTreeDirty = true;
+  }
+
+  void _rebuildLibraryIndexes() {
+    final tracksByGroup = <String, List<MusicTrack>>{};
+    _libraryByPath
+      ..clear()
+      ..addEntries(_library.map((track) => MapEntry(track.path, track)));
+    for (final track in _library) {
+      tracksByGroup
+          .putIfAbsent(track.groupKey, () => <MusicTrack>[])
+          .add(track);
+    }
+    for (final entry in tracksByGroup.entries) {
+      entry.value.sort(getTrackComparator);
+    }
+    _tracksByGroup
+      ..clear()
+      ..addAll(
+        tracksByGroup.map(
+          (groupKey, tracks) =>
+              MapEntry(groupKey, List<MusicTrack>.unmodifiable(tracks)),
+        ),
+      );
+    _sortedLibraryTracks = List<MusicTrack>.unmodifiable(
+      _library.toList()..sort(getTrackComparator),
+    );
+    _groupOrderSet
+      ..clear()
+      ..addAll(_groupOrder);
+    _markLibraryStructureDirty();
+  }
+
+  void _syncGroupOrderFromLibrary() {
+    final activeGroupKeys = _library.map((track) => track.groupKey).toSet();
+    _groupOrder.removeWhere((groupKey) => !activeGroupKeys.contains(groupKey));
+    for (final groupKey in activeGroupKeys) {
+      if (_groupOrderSet.add(groupKey)) {
+        _groupOrder.add(groupKey);
+      }
+    }
+    _groupOrderSet
+      ..clear()
+      ..addAll(_groupOrder);
+  }
+
+  void _bindNotificationHandler() {
+    _notificationHandler.bindCallbacks(
+      onPlay: playPrimarySessionFromNotification,
+      onPlayFromMediaId: playNotificationSessionById,
+      onPause: pausePrimarySessionFromNotification,
+      onStop: stopPrimarySessionFromNotification,
+      onSkipToNext: skipPrimarySessionToNextFromNotification,
+      onSkipToPrevious: skipPrimarySessionToPreviousFromNotification,
+      onSeek: seekPrimarySessionFromNotification,
+      onTogglePlayPause: togglePrimarySessionPlayPauseFromNotification,
+      onToggleSessionPlayback: toggleSessionPlaybackFromNotification,
+      onSkipToPreviousSession: skipNotificationSessionToPreviousById,
+      onSkipToNextSession: skipNotificationSessionToNextById,
+    );
+    _syncNotificationState();
+  }
+
+  Future<void> playPrimarySessionFromNotification() async {
+    final session = _resolveNotificationSession();
+    if (session == null) return;
+    await _resumeNotificationSession(session);
+  }
+
+  Future<void> playNotificationSessionById(String mediaId) async {
+    final session = _resolveNotificationSession(mediaId);
+    if (session == null) return;
+    await _resumeNotificationSession(session);
+  }
+
+  Future<void> pausePrimarySessionFromNotification() async {
+    final session = _notificationFocusedSession;
+    if (session == null || !session.state.playing) return;
+    await session.player.pause();
+  }
+
+  Future<void> togglePrimarySessionPlayPauseFromNotification() async {
+    final session = _resolveNotificationSession();
+    if (session == null || session.isLoading) return;
+    if (session.state.playing) {
+      await session.player.pause();
+      return;
+    }
+    await _resumeNotificationSession(session);
+  }
+
+  Future<void> stopPrimarySessionFromNotification() async {
+    final session = _notificationFocusedSession;
+    if (session == null) return;
+    await session.player.pause();
+  }
+
+  Future<void> skipPrimarySessionToNextFromNotification() async {
+    final session = _notificationFocusedSession;
+    if (session == null) return;
+    await seekSessionToNext(session.id);
+  }
+
+  Future<void> skipPrimarySessionToPreviousFromNotification() async {
+    final session = _notificationFocusedSession;
+    if (session == null) return;
+    await seekSessionToPrev(session.id);
+  }
+
+  Future<void> toggleSessionPlaybackFromNotification(String sessionId) async {
+    final session = _sessions[sessionId];
+    if (session == null) return;
+    await toggleSessionPlayPause(session.id);
+  }
+
+  Future<void> skipNotificationSessionToPreviousById(String sessionId) async {
+    final session = _sessions[sessionId];
+    if (session == null) return;
+    await seekSessionToPrev(session.id);
+  }
+
+  Future<void> skipNotificationSessionToNextById(String sessionId) async {
+    final session = _sessions[sessionId];
+    if (session == null) return;
+    await seekSessionToNext(session.id);
+  }
+
+  Future<void> seekPrimarySessionFromNotification(Duration position) async {
+    final session = _notificationFocusedSession;
+    if (session == null) return;
+    await seekSession(session.id, position);
+  }
+
+  List<PlaybackSession> get _notificationQueueSessions {
+    return activeSessions;
+  }
+
+  PlaybackSession? get _notificationFocusedSession {
+    final queueSessions = _notificationQueueSessions;
+    final focusedId = _notificationFocusSessionId;
+    if (focusedId != null) {
+      for (final session in queueSessions) {
+        if (session.id == focusedId) return session;
+      }
+    }
+    final fallback = queueSessions.isNotEmpty ? queueSessions.first : null;
+    _notificationFocusSessionId = fallback?.id;
+    return fallback;
+  }
+
+  PlaybackSession? _resolveNotificationSession([String? sessionId]) {
+    if (sessionId != null) {
+      final matchedSession = _sessions[sessionId];
+      if (matchedSession != null) {
+        _notificationFocusSessionId = matchedSession.id;
+        return matchedSession;
+      }
+    }
+    final focusedSession = _notificationFocusedSession;
+    if (focusedSession != null) {
+      _notificationFocusSessionId = focusedSession.id;
+    }
+    return focusedSession;
+  }
+
+  Future<void> _resumeNotificationSession(PlaybackSession session) async {
+    if (session.isLoading || session.state.playing) return;
+    _notificationFocusSessionId = session.id;
+    if (session.state.processingState == ProcessingState.completed) {
+      await _prepareAndPlay(session, nextPath: session.currentTrackPath);
+      return;
+    }
+    await _startSessionPlayback(session, shouldStartTriggerCountdown: true);
+  }
+
+  AudioProcessingState _mapProcessingState(ProcessingState state) {
+    switch (state) {
+      case ProcessingState.idle:
+        return AudioProcessingState.idle;
+      case ProcessingState.loading:
+        return AudioProcessingState.loading;
+      case ProcessingState.buffering:
+        return AudioProcessingState.buffering;
+      case ProcessingState.ready:
+        return AudioProcessingState.ready;
+      case ProcessingState.completed:
+        return AudioProcessingState.completed;
+    }
+  }
+
+  PlaybackNotificationSnapshot? _buildNotificationSnapshot() {
+    final sessions = _notificationQueueSessions;
+    if (sessions.isEmpty) {
+      _notificationFocusSessionId = null;
+      return null;
+    }
+
+    if (sessions.length > 1) {
+      final hasPlayingSession = sessions.any(
+        (session) => session.state.playing,
+      );
+      final focusedSession = _notificationFocusedSession;
+      if (focusedSession == null) return null;
+      _notificationFocusSessionId = focusedSession.id;
+      final mediaItem = _summaryMediaItemForSessions(sessions);
+
+      return PlaybackNotificationSnapshot(
+        queue: <MediaItem>[mediaItem],
+        queueIndex: 0,
+        mediaItem: mediaItem,
+        playing: hasPlayingSession,
+        processingState: _mapProcessingState(
+          focusedSession.state.processingState,
+        ),
+        updatePosition: Duration.zero,
+        bufferedPosition: Duration.zero,
+        speed: 1.0,
+        hasPrevious: false,
+        hasNext: false,
+        showTransportControls: false,
+      );
+    }
+
+    final session = _notificationFocusedSession;
+    if (session == null) return null;
+
+    _notificationFocusSessionId = session.id;
+    final mediaItem = _mediaItemForSession(session);
+    final previousPath = _nextPathFor(session, forward: false);
+    final nextPath = _nextPathFor(session, forward: true);
+
+    return PlaybackNotificationSnapshot(
+      queue: <MediaItem>[mediaItem],
+      queueIndex: 0,
+      mediaItem: mediaItem,
+      playing: session.state.playing,
+      processingState: _mapProcessingState(session.state.processingState),
+      updatePosition: session.player.position,
+      bufferedPosition: session.player.bufferedPosition,
+      speed: session.player.speed,
+      hasPrevious: previousPath != null,
+      hasNext: nextPath != null,
+    );
+  }
+
+  String _notificationTitleForSession(PlaybackSession session) {
+    final track = trackByPath(session.currentTrackPath);
+    return track?.displayName ??
+        path.basenameWithoutExtension(session.currentTrackPath);
+  }
+
+  List<String> _notificationOverviewTitles(Iterable<PlaybackSession> sessions) {
+    final uniqueTitles = <String>{};
+    for (final session in sessions) {
+      final title = _notificationTitleForSession(session);
+      if (title.isNotEmpty) {
+        uniqueTitles.add(title);
+      }
+    }
+    return uniqueTitles.toList(growable: false);
+  }
+
+  String _notificationSummaryText(List<PlaybackSession> sessions) {
+    final titles = _notificationOverviewTitles(sessions);
+    if (titles.isEmpty) {
+      return '${sessions.length} active sessions';
+    }
+    if (titles.length == 1) {
+      return titles.first;
+    }
+    if (titles.length == 2) {
+      return '${titles[0]} / ${titles[1]}';
+    }
+    return '${titles.first} +${titles.length - 1}';
+  }
+
+  MediaItem _summaryMediaItemForSessions(List<PlaybackSession> sessions) {
+    final titles = _notificationOverviewTitles(sessions);
+    return MediaItem(
+      id: 'notification_summary',
+      title: 'AudioPlayer',
+      album: 'AudioPlayer',
+      artist: _notificationSummaryText(sessions),
+      displayTitle: 'AudioPlayer',
+      displaySubtitle: _notificationSummaryText(sessions),
+      displayDescription: null,
+      extras: <String, dynamic>{
+        _androidGroupSummaryKey: 1,
+        'android_group_key': _androidNotificationGroupKey,
+        _androidSummaryTitleKey: 'AudioPlayer',
+        _androidSummaryTextKey: _notificationSummaryText(sessions),
+        _androidSummaryLinesKey: titles.join('\n'),
+      },
+    );
+  }
+
+  MediaItem _mediaItemForSession(PlaybackSession session) {
+    final track = trackByPath(session.currentTrackPath);
+    final displayName = _notificationTitleForSession(session);
+    final groupTitle = track?.groupTitle ?? 'Audio';
+    final notificationSubtitle = _notificationSubtitleForSession(session);
+    return MediaItem(
+      id: session.id,
+      title: displayName,
+      album: groupTitle,
+      artist: notificationSubtitle ?? groupTitle,
+      artUri: _notificationArtUriForTrack(track),
+      duration: session.player.duration,
+      displayTitle: displayName,
+      displaySubtitle: notificationSubtitle ?? groupTitle,
+      displayDescription: notificationSubtitle ?? groupTitle,
+      extras: const <String, dynamic>{},
+    );
+  }
+
+  Uri? _notificationArtUriForTrack(MusicTrack? track) {
+    final coverSearchKey = _notificationCoverSearchKey(track);
+    if (coverSearchKey == null) {
+      return null;
+    }
+    final coverPath = _resolvedNotificationCoverPaths[coverSearchKey];
+    if (!_resolvedNotificationCoverPaths.containsKey(coverSearchKey)) {
+      unawaited(_resolveNotificationCoverPathForTrack(track));
+      return null;
+    }
+    if (coverPath == null || coverPath.isEmpty) return null;
+    return Uri.file(coverPath);
+  }
+
+  String? coverPathForTrack(MusicTrack? track) {
+    final coverSearchKey = _notificationCoverSearchKey(track);
+    if (coverSearchKey == null) {
+      return null;
+    }
+    return _resolvedNotificationCoverPaths[coverSearchKey];
+  }
+
+  Future<String?> coverPathFutureForTrack(MusicTrack? track) {
+    return _resolveNotificationCoverPathForTrack(track);
+  }
+
+  Future<String?> coverPathFutureForFolder(String folderPath) {
+    if (folderPath.startsWith('content://')) {
+      return Future<String?>.value(null);
+    }
+    return _resolveCoverPathForFolder(folderPath);
+  }
+
+  String? _notificationCoverSearchKey(MusicTrack? track) {
+    if (track == null) {
+      return null;
+    }
+    if (track.path.startsWith('content://')) {
+      final groupKey = track.groupKey.trim();
+      if (groupKey.isNotEmpty) {
+        return 'content:$groupKey';
+      }
+      return 'content:${track.path}';
+    }
+    final directoryPath = path.dirname(track.path);
+    if (directoryPath.isEmpty || directoryPath == '.') {
+      return null;
+    }
+    return path.normalize(directoryPath);
+  }
+
+  Future<String?> _resolveNotificationCoverPathForTrack(MusicTrack? track) {
+    final coverSearchKey = _notificationCoverSearchKey(track);
+    if (coverSearchKey == null) {
+      return Future<String?>.value(null);
+    }
+    if (_resolvedNotificationCoverPaths.containsKey(coverSearchKey)) {
+      return Future<String?>.value(
+        _resolvedNotificationCoverPaths[coverSearchKey],
+      );
+    }
+
+    return _notificationCoverPathFutures.putIfAbsent(coverSearchKey, () async {
+      String? coverPath;
+      if (track != null) {
+        if (track.path.startsWith('content://')) {
+          coverPath = await _resolveContentCoverPathForTrack(track);
+        } else {
+          for (final candidateDirectory
+              in _notificationCoverCandidateDirectories(track)) {
+            coverPath = await _findNotificationCoverPath(candidateDirectory);
+            if (coverPath != null) {
+              break;
+            }
+          }
+        }
+      }
+
+      _notificationCoverPathFutures.remove(coverSearchKey);
+      final previous = _resolvedNotificationCoverPaths[coverSearchKey];
+      _resolvedNotificationCoverPaths[coverSearchKey] = coverPath;
+
+      if (previous != coverPath) {
+        final focusedTrack = trackByPath(
+          _notificationFocusedSession?.currentTrackPath ?? '',
+        );
+        if (_notificationCoverSearchKey(focusedTrack) == coverSearchKey) {
+          _syncNotificationState();
+          notifyListeners();
+        }
+      }
+
+      return coverPath;
+    });
+  }
+
+  Future<String?> _resolveContentCoverPathForTrack(MusicTrack track) async {
+    try {
+      return await _fileCacheChannel.invokeMethod<String>(
+        'resolveTrackCover',
+        <String, dynamic>{'path': track.path, 'groupKey': track.groupKey},
+      );
+    } on MissingPluginException {
+      return null;
+    } catch (e) {
+      debugPrint('AudioProvider._resolveContentCoverPathForTrack error: $e');
+      return null;
+    }
+  }
+
+  List<String> _notificationCoverCandidateDirectories(MusicTrack track) {
+    final coverSearchKey = _notificationCoverSearchKey(track);
+    if (coverSearchKey == null) {
+      return const <String>[];
+    }
+
+    final directories = <String>[coverSearchKey];
+    for (final watchedFolder in _watchedFolders) {
+      if (watchedFolder.startsWith('content://')) {
+        continue;
+      }
+      final normalizedRoot = path.normalize(watchedFolder);
+      if (!_isPathWithinOrEqual(coverSearchKey, normalizedRoot)) {
+        continue;
+      }
+
+      var current = coverSearchKey;
+      while (!path.equals(current, normalizedRoot)) {
+        final parent = path.dirname(current);
+        if (parent == current || directories.contains(parent)) {
+          break;
+        }
+        directories.add(parent);
+        current = parent;
+      }
+    }
+    return directories;
+  }
+
+  bool _isPathWithinOrEqual(String pathValue, String rootPath) {
+    return path.equals(pathValue, rootPath) ||
+        path.isWithin(rootPath, pathValue);
+  }
+
+  Future<String?> _resolveCoverPathForFolder(String folderPath) {
+    if (_resolvedCoverPaths.containsKey(folderPath)) {
+      return Future<String?>.value(_resolvedCoverPaths[folderPath]);
+    }
+
+    return _coverPathFutures.putIfAbsent(folderPath, () async {
+      final coverPath = await _findNotificationCoverPath(folderPath);
+      _coverPathFutures.remove(folderPath);
+
+      final previous = _resolvedCoverPaths[folderPath];
+      _resolvedCoverPaths[folderPath] = coverPath;
+
+      if (previous != coverPath) {
+        notifyListeners();
+      }
+
+      return coverPath;
+    });
+  }
+
+  Future<String?> _findNotificationCoverPath(String folderPath) async {
+    final directory = Directory(folderPath);
+    if (!await directory.exists()) return null;
+
+    final images = <String>[];
+    try {
+      await for (final entity in directory.list(
+        recursive: true,
+        followLinks: false,
+      )) {
+        if (entity is! File) continue;
+        final extension = path.extension(entity.path).toLowerCase();
+        if (_supportedImageExtensions.contains(extension)) {
+          images.add(entity.path);
+        }
+      }
+    } catch (_) {
+      return null;
+    }
+
+    if (images.isEmpty) return null;
+    images.sort((a, b) {
+      final nameResult = path
+          .basename(a)
+          .toLowerCase()
+          .compareTo(path.basename(b).toLowerCase());
+      if (nameResult != 0) return nameResult;
+      return a.toLowerCase().compareTo(b.toLowerCase());
+    });
+    return images.first;
+  }
+
+  void _clearResolvedCoverPaths() {
+    _coverPathFutures.clear();
+    _resolvedCoverPaths.clear();
+    _notificationCoverPathFutures.clear();
+    _resolvedNotificationCoverPaths.clear();
+  }
+
+  void _syncNotificationState() {
+    _notificationHandler.updateSnapshot(_buildNotificationSnapshot());
+    unawaited(_syncUnifiedPlaybackNotifications());
+  }
+
+  void _scheduleFocusedNotificationRefresh(
+    String sessionId, {
+    bool immediate = false,
+  }) {
+    if (_notificationFocusedSession?.id != sessionId) {
+      return;
+    }
+
+    if (immediate) {
+      _notificationProgressRefreshTimer?.cancel();
+      _notificationProgressRefreshTimer = null;
+      _queuedNotificationRefreshSessionId = null;
+      _syncNotificationState();
+      return;
+    }
+
+    _queuedNotificationRefreshSessionId = sessionId;
+    if (_notificationProgressRefreshTimer != null) {
+      return;
+    }
+
+    _notificationProgressRefreshTimer = Timer(
+      _notificationProgressRefreshInterval,
+      () {
+        _notificationProgressRefreshTimer = null;
+        final queuedSessionId = _queuedNotificationRefreshSessionId;
+        _queuedNotificationRefreshSessionId = null;
+        if (queuedSessionId == null ||
+            _notificationFocusedSession?.id != queuedSessionId) {
+          return;
+        }
+        _syncNotificationState();
+      },
+    );
+  }
+
+  Future<void> _syncUnifiedPlaybackNotifications() async {
+    final sessionsToShow = activeSessions.length <= 1
+        ? const <PlaybackSession>[]
+        : activeSessions;
+    final showUnifiedSummary =
+        sessionsToShow.isNotEmpty &&
+        !sessionsToShow.any((session) => session.state.playing);
+    final summaryText = showUnifiedSummary
+        ? _notificationSummaryText(sessionsToShow)
+        : null;
+    final summaryLines = showUnifiedSummary
+        ? _notificationOverviewTitles(sessionsToShow)
+        : const <String>[];
+
+    final payload = sessionsToShow
+        .map((session) {
+          final title = _notificationTitleForSession(session);
+          final subtitle = _notificationSubtitleForSession(session);
+          final track = trackByPath(session.currentTrackPath);
+          final description = track?.groupSubtitle ?? track?.groupTitle;
+          final artPath = coverPathForTrack(track);
+          return <String, dynamic>{
+            'id': session.id,
+            'title': title,
+            if (subtitle != null && subtitle.isNotEmpty) 'subtitle': subtitle,
+            if (description != null && description.isNotEmpty)
+              'description': description,
+            if (artPath != null && artPath.isNotEmpty) 'artPath': artPath,
+            'playing': session.state.playing,
+            'hasPrevious': _nextPathFor(session, forward: false) != null,
+            'hasNext': _nextPathFor(session, forward: true) != null,
+          };
+        })
+        .toList(growable: false);
+
+    final nextSyncKey = json.encode(<String, dynamic>{
+      'items': payload,
+      'showSummary': showUnifiedSummary,
+      'summaryText': summaryText,
+      'summaryLines': summaryLines,
+    });
+    if (_unifiedNotificationSyncKey == nextSyncKey) {
+      return;
+    }
+
+    try {
+      if (payload.isEmpty) {
+        await _notificationsChannel.invokeMethod<void>(
+          'clearUnifiedPlaybackNotifications',
+        );
+      } else {
+        await _notificationsChannel.invokeMethod<void>(
+          'syncUnifiedPlaybackNotifications',
+          <String, dynamic>{
+            'items': payload,
+            'showSummary': showUnifiedSummary,
+            'summaryText': summaryText,
+            'summaryLines': summaryLines,
+          },
+        );
+      }
+      _unifiedNotificationSyncKey = nextSyncKey;
+    } on MissingPluginException {
+      debugPrint(
+        'AudioProvider._syncUnifiedPlaybackNotifications: notifications '
+        'channel not ready yet; will retry on next sync.',
+      );
+    } catch (e) {
+      debugPrint('AudioProvider._syncUnifiedPlaybackNotifications error: $e');
+    }
+  }
+
+  void refreshNotificationState() {
+    _syncNotificationState();
+    notifyListeners();
+  }
+
+  Future<void> selectNotificationSessionFromQueue(int index) async {
+    final sessions = _notificationQueueSessions;
+    if (index < 0 || index >= sessions.length) return;
+    _notificationFocusSessionId = sessions[index].id;
+    _syncNotificationState();
+    notifyListeners();
   }
 
   // ---------------------------------------------------------------------------
@@ -283,6 +1089,7 @@ class AudioProvider with ChangeNotifier {
           .map(MusicTrack.fromJson)
           .toList();
       _library.addAll(tracks);
+      _rebuildLibraryIndexes();
       notifyListeners();
     } catch (_) {
       // If loading fails we just start with an empty library
@@ -305,6 +1112,9 @@ class AudioProvider with ChangeNotifier {
       final list = (json.decode(raw) as List<dynamic>).cast<String>();
       _groupOrder.clear();
       _groupOrder.addAll(list);
+      _groupOrderSet
+        ..clear()
+        ..addAll(list);
     } catch (_) {}
   }
 
@@ -323,6 +1133,7 @@ class AudioProvider with ChangeNotifier {
       final list = (json.decode(raw) as List<dynamic>).cast<String>();
       _sessionOrder.clear();
       _sessionOrder.addAll(list);
+      _markActiveSessionsDirty();
     } catch (_) {}
   }
 
@@ -333,6 +1144,15 @@ class AudioProvider with ChangeNotifier {
     } catch (_) {}
   }
 
+  void _scheduleSaveSessionOrder({
+    Duration delay = const Duration(milliseconds: 180),
+  }) {
+    _saveSessionOrderTimer?.cancel();
+    _saveSessionOrderTimer = Timer(delay, () {
+      unawaited(_saveSessionOrder());
+    });
+  }
+
   // ---------------------------------------------------------------------------
   // Session persistence
   // ---------------------------------------------------------------------------
@@ -340,12 +1160,20 @@ class AudioProvider with ChangeNotifier {
   Future<void> _loadData() async {
     await _loadLibrary();
     await _loadGroupOrder();
+    _syncGroupOrderFromLibrary();
+    _markLibraryStructureDirty();
     await _loadSessionOrder();
     await _loadWatchedFolders();
+    await _loadPlaybackSettings();
     await _loadConverterSettings();
     await _loadTimerSettings();
     await _loadSessions();
+    if (!_multiThreadPlaybackEnabled) {
+      await _enforceSingleThreadPlayback();
+    }
+    await _loadTimerRuntime();
     _syncKeepCpuAwake();
+    notifyListeners();
   }
 
   Future<void> _loadSessions() async {
@@ -374,8 +1202,9 @@ class AudioProvider with ChangeNotifier {
           handleInterruptions: false,
           handleAudioSessionActivation: false,
         );
+        final restoredSessionId = item['id'] as String? ?? _nextSessionId();
         final session = PlaybackSession(
-          id: 'session_${++_sessionSeed}',
+          id: restoredSessionId,
           player: player,
           currentTrackPath: track.path,
           loopMode: loopMode,
@@ -387,6 +1216,7 @@ class AudioProvider with ChangeNotifier {
           state: player.playerState,
         );
         _sessions[session.id] = session;
+        _markActiveSessionsDirty();
         _bindSessionListeners(session);
         restoredIds.add(session.id);
 
@@ -402,6 +1232,11 @@ class AudioProvider with ChangeNotifier {
             loopMode == SessionLoopMode.single ? LoopMode.one : LoopMode.off,
           );
           session.loadedPath = track.path;
+          _ensureSubtitleTrackLoaded(track.path);
+          _refreshNotificationSubtitleForSession(
+            session,
+            syncNotification: false,
+          );
         } catch (_) {}
       }
 
@@ -415,7 +1250,14 @@ class AudioProvider with ChangeNotifier {
       }
       _sessionOrder.clear();
       _sessionOrder.addAll(validOrdered);
+      _markActiveSessionsDirty();
+      _notificationFocusSessionId = _sessionOrder.isNotEmpty
+          ? _sessionOrder.first
+          : restoredIds.isNotEmpty
+          ? restoredIds.first
+          : null;
 
+      _syncNotificationState();
       if (_sessions.isNotEmpty) notifyListeners();
     } catch (_) {}
   }
@@ -432,6 +1274,7 @@ class AudioProvider with ChangeNotifier {
         ordered
             .map(
               (s) => {
+                'id': s.id,
                 'path': s.currentTrackPath,
                 'loopMode': s.loopMode.index,
                 'volume': s.volume,
@@ -440,6 +1283,41 @@ class AudioProvider with ChangeNotifier {
             .toList(),
       );
       await prefs.setString(_kSessionsKey, encoded);
+    } catch (_) {}
+  }
+
+  void _scheduleSaveSessionState({
+    Duration delay = const Duration(milliseconds: 220),
+  }) {
+    _saveSessionStateTimer?.cancel();
+    _saveSessionStateTimer = Timer(delay, () {
+      unawaited(_saveSessionState());
+    });
+  }
+
+  void _scheduleSessionPersistence() {
+    _scheduleSaveSessionState();
+    _scheduleSaveSessionOrder();
+  }
+
+  Future<void> _loadPlaybackSettings() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_kPlaybackSettingsKey);
+      if (raw == null || raw.isEmpty) return;
+      final map = json.decode(raw) as Map<String, dynamic>;
+      _multiThreadPlaybackEnabled =
+          map['multiThreadPlaybackEnabled'] as bool? ?? false;
+    } catch (_) {}
+  }
+
+  Future<void> _savePlaybackSettings() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final encoded = json.encode({
+        'multiThreadPlaybackEnabled': _multiThreadPlaybackEnabled,
+      });
+      await prefs.setString(_kPlaybackSettingsKey, encoded);
     } catch (_) {}
   }
 
@@ -493,6 +1371,115 @@ class AudioProvider with ChangeNotifier {
     } catch (_) {}
   }
 
+  Future<void> _loadTimerRuntime() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_kTimerRuntimeKey);
+      if (raw == null || raw.isEmpty) return;
+
+      final map = json.decode(raw) as Map<String, dynamic>;
+      final now = DateTime.now();
+
+      final durationMs = map['timerDurationMs'] as int?;
+      final timerModeIndex = map['timerMode'] as int?;
+      final waitingForPlayback =
+          map['timerWaitingForPlayback'] as bool? ?? false;
+      final timerEndsAtMs = map['timerEndsAtMs'] as int?;
+      final autoResumeAtMs = map['autoResumeAtMs'] as int?;
+      final pausedPaths =
+          (map['pausedByTimerPaths'] as List<dynamic>? ?? const [])
+              .whereType<String>()
+              .toList();
+
+      _pausedByTimerPaths
+        ..clear()
+        ..addAll(pausedPaths);
+      _autoResumeAt = autoResumeAtMs == null
+          ? null
+          : DateTime.fromMillisecondsSinceEpoch(autoResumeAtMs);
+
+      if (timerModeIndex != null &&
+          timerModeIndex >= 0 &&
+          timerModeIndex < TimerMode.values.length) {
+        _timerMode = TimerMode.values[timerModeIndex];
+      }
+      if (durationMs != null && durationMs > 0) {
+        _timerDuration = Duration(milliseconds: durationMs);
+      }
+
+      if (_timerDuration != null && waitingForPlayback) {
+        _timerRemaining = _timerDuration;
+        _timerWaitingForPlayback = true;
+        _timerActive = false;
+      }
+
+      if (timerEndsAtMs != null && _timerDuration != null) {
+        final restoredEndsAt = DateTime.fromMillisecondsSinceEpoch(
+          timerEndsAtMs,
+        );
+        if (restoredEndsAt.isAfter(now)) {
+          final generation = ++_timerGeneration;
+          _timerEndsAt = restoredEndsAt;
+          _timerActive = true;
+          _timerWaitingForPlayback = false;
+          final remaining = restoredEndsAt.difference(now);
+          _timerRemaining = Duration(
+            seconds: (remaining.inMilliseconds + 999) ~/ 1000,
+          );
+          _countdownTimer?.cancel();
+          _countdownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+            if (generation != _timerGeneration) return;
+            _tickCountdown();
+          });
+        } else {
+          _timerEndsAt = null;
+          _timerActive = false;
+          _timerRemaining = Duration.zero;
+        }
+      }
+
+      if (_autoResumeAt != null) {
+        if (_autoResumeAt!.isAfter(now) && _pausedByTimerPaths.isNotEmpty) {
+          _scheduleAutoResumeTimer(_autoResumeAt!);
+        } else if (_pausedByTimerPaths.isNotEmpty) {
+          await _resumeTimerPausedSessions();
+        } else {
+          _autoResumeAt = null;
+        }
+      }
+
+      _syncNotificationState();
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  Future<void> _saveTimerRuntime() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final hasRuntime =
+          _timerMode != null ||
+          _timerDuration != null ||
+          _timerActive ||
+          _timerWaitingForPlayback ||
+          _autoResumeAt != null ||
+          _pausedByTimerPaths.isNotEmpty;
+      if (!hasRuntime) {
+        await prefs.remove(_kTimerRuntimeKey);
+        return;
+      }
+
+      final encoded = json.encode({
+        'timerMode': _timerMode?.index,
+        'timerDurationMs': _timerDuration?.inMilliseconds,
+        'timerWaitingForPlayback': _timerWaitingForPlayback,
+        'timerEndsAtMs': _timerEndsAt?.millisecondsSinceEpoch,
+        'autoResumeAtMs': _autoResumeAt?.millisecondsSinceEpoch,
+        'pausedByTimerPaths': _pausedByTimerPaths,
+      });
+      await prefs.setString(_kTimerRuntimeKey, encoded);
+    } catch (_) {}
+  }
+
   Future<void> _loadConverterSettings() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -542,18 +1529,38 @@ class AudioProvider with ChangeNotifier {
     unawaited(_saveConverterSettings());
   }
 
+  Future<void> setMultiThreadPlaybackEnabled(bool enabled) async {
+    if (_multiThreadPlaybackEnabled == enabled) return;
+    _multiThreadPlaybackEnabled = enabled;
+    if (!enabled) {
+      await _enforceSingleThreadPlayback();
+    }
+    notifyListeners();
+    unawaited(_savePlaybackSettings());
+  }
+
   /// Register [folderPath] as a watched folder (idempotent).
-  void addWatchedFolder(String folderPath) {
+  void addWatchedFolder(String folderPath, {bool notify = true}) {
     if (!_watchedFolders.contains(folderPath)) {
       _watchedFolders.add(folderPath);
+      _clearResolvedCoverPaths();
+      _markLibraryStructureDirty();
       unawaited(_saveWatchedFolders());
+      if (notify) {
+        notifyListeners();
+      }
     }
   }
 
   /// Stop watching [folderPath].
-  void removeWatchedFolder(String folderPath) {
+  void removeWatchedFolder(String folderPath, {bool notify = true}) {
     if (_watchedFolders.remove(folderPath)) {
+      _clearResolvedCoverPaths();
+      _markLibraryStructureDirty();
       unawaited(_saveWatchedFolders());
+      if (notify) {
+        notifyListeners();
+      }
     }
   }
 
@@ -562,74 +1569,109 @@ class AudioProvider with ChangeNotifier {
   // ---------------------------------------------------------------------------
 
   void setScanning(bool scanning) {
+    if (_isScanning == scanning) return;
     _isScanning = scanning;
     notifyListeners();
   }
 
-  void addTracks(List<MusicTrack> newTracks) {
-    final existingPaths = _library.map((t) => t.path).toSet();
-    final toAdd = newTracks
-        .where((t) => !existingPaths.contains(t.path))
-        .toList();
+  void addTracks(
+    List<MusicTrack> newTracks, {
+    bool notify = true,
+    bool persist = true,
+  }) {
+    if (newTracks.isEmpty) return;
+
+    final toAdd = <MusicTrack>[];
+    var didChangeGroupOrder = false;
+    for (final track in newTracks) {
+      if (_libraryByPath.containsKey(track.path)) {
+        continue;
+      }
+      _library.add(track);
+      _libraryByPath[track.path] = track;
+      toAdd.add(track);
+      if (_groupOrderSet.add(track.groupKey)) {
+        _groupOrder.add(track.groupKey);
+        didChangeGroupOrder = true;
+      }
+    }
+
     if (toAdd.isNotEmpty) {
-      _library.addAll(toAdd);
-      // Add new groupKeys to _groupOrder if not already present
-      for (final t in toAdd) {
-        if (!_groupOrder.contains(t.groupKey)) {
-          _groupOrder.add(t.groupKey);
+      _clearResolvedCoverPaths();
+      _rebuildLibraryIndexes();
+      if (notify) {
+        notifyListeners();
+      }
+      if (persist) {
+        _saveLibrary();
+        if (didChangeGroupOrder) {
+          _saveGroupOrder();
         }
       }
-      notifyListeners();
-      _saveLibrary();
-      _saveGroupOrder();
     }
   }
 
-  void removeTrackFromLibrary(String trackPath) {
-    _library.removeWhere((t) => t.path == trackPath);
+  Future<void> removeTrackFromLibrary(String trackPath) async {
+    final removedTrack = _libraryByPath.remove(trackPath);
+    if (removedTrack == null) return;
+
+    _library.removeWhere((track) => track.path == trackPath);
+    _clearResolvedCoverPaths();
 
     final sessionsToRemove = _sessions.values
         .where((s) => s.currentTrackPath == trackPath)
         .map((s) => s.id)
         .toList();
-    for (final id in sessionsToRemove) {
-      removeSession(id);
+    if (sessionsToRemove.isNotEmpty) {
+      await _removeSessions(sessionsToRemove, persist: false, notify: false);
     }
 
+    if (!_library.any((track) => track.groupKey == removedTrack.groupKey)) {
+      _groupOrder.remove(removedTrack.groupKey);
+      _groupOrderSet.remove(removedTrack.groupKey);
+    }
+
+    _rebuildLibraryIndexes();
     notifyListeners();
     _saveLibrary();
+    _saveGroupOrder();
   }
 
   /// Remove an entire folder (node) from the library, including all its tracks
   /// and any active sessions playing those tracks.
-  void removeFolderFromLibrary(String folderPath) {
-    // Collect track paths belonging to this folder (starts with folderPath)
+  Future<void> removeFolderFromLibrary(String folderPath) async {
+    _clearResolvedCoverPaths();
     final trackPaths = _library
-        .where((t) => t.path.startsWith(folderPath))
-        .map((t) => t.path)
+        .where((track) => track.path.startsWith(folderPath))
+        .map((track) => track.path)
         .toSet();
+    if (trackPaths.isEmpty && !_watchedFolders.contains(folderPath)) {
+      return;
+    }
 
-    // Stop and remove active sessions for tracks in this folder
     final sessionsToRemove = _sessions.values
         .where((s) => trackPaths.contains(s.currentTrackPath))
         .map((s) => s.id)
         .toList();
-    for (final id in sessionsToRemove) {
-      removeSession(id);
+    if (sessionsToRemove.isNotEmpty) {
+      await _removeSessions(sessionsToRemove, persist: false, notify: false);
     }
 
-    // Remove tracks from library
-    _library.removeWhere((t) => t.path.startsWith(folderPath));
-
-    // Remove from group order
+    _library.removeWhere((track) => track.path.startsWith(folderPath));
+    for (final trackPath in trackPaths) {
+      _libraryByPath.remove(trackPath);
+    }
     _groupOrder.removeWhere((key) => key.startsWith(folderPath));
+    _groupOrderSet
+      ..clear()
+      ..addAll(_groupOrder);
 
-    // Remove from watched folders if it's a root
     if (_watchedFolders.contains(folderPath)) {
       _watchedFolders.remove(folderPath);
       unawaited(_saveWatchedFolders());
     }
 
+    _rebuildLibraryIndexes();
     notifyListeners();
     _saveLibrary();
     _saveGroupOrder();
@@ -643,9 +1685,14 @@ class AudioProvider with ChangeNotifier {
     return a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase());
   }
 
-  List<LibraryNode> buildLibraryTree() {
+  List<LibraryNode> buildLibraryTree() => libraryTree;
+
+  _LibraryTreeSnapshot _buildLibraryTreeSnapshot() {
     final rootNodes = <String, FolderNode>{};
+    final folderIndexByPath = <String, Map<String, FolderNode>>{};
     final singleFiles = <TrackNode>[];
+    final watchedRoots = _watchedFolders.toList(growable: false)
+      ..sort((a, b) => b.length.compareTo(a.length));
 
     // Identify roots: we'll use the tracked groupKeys or watched folders as base roots.
     // To present a nice tree, we figure out the relative paths from the roots.
@@ -661,7 +1708,7 @@ class AudioProvider with ChangeNotifier {
       // If we don't have a top-level node for this dir yet, we create the chain
       // First, find if this dir belongs to any root we already know
       String? matchedRoot;
-      for (final root in _watchedFolders) {
+      for (final root in watchedRoots) {
         if (dirPath.startsWith(root)) {
           matchedRoot = root;
           break;
@@ -674,7 +1721,8 @@ class AudioProvider with ChangeNotifier {
       // Ensure root exists
       if (!rootNodes.containsKey(matchedRoot)) {
         final rootName = _resolveRootNodeName(matchedRoot, track);
-        rootNodes[matchedRoot] = FolderNode(rootName, matchedRoot);
+        rootNodes[matchedRoot] = FolderNode(rootName, matchedRoot, depth: 0);
+        folderIndexByPath[matchedRoot] = <String, FolderNode>{};
       }
 
       // Build intermediate folders
@@ -700,16 +1748,23 @@ class AudioProvider with ChangeNotifier {
               ? currentPath + part
               : currentPath + path.separator + part;
 
-          // Find or create child folder
-          int childIdx = currentNode.children.indexWhere(
-            (c) => c is FolderNode && c.name == part,
+          final childFolders = folderIndexByPath.putIfAbsent(
+            currentNode.path,
+            () => <String, FolderNode>{},
           );
-          if (childIdx == -1) {
-            final newFolder = FolderNode(part, currentPath);
+          final existingFolder = childFolders[part];
+          if (existingFolder == null) {
+            final newFolder = FolderNode(
+              part,
+              currentPath,
+              depth: currentNode.depth + 1,
+            );
             currentNode.children.add(newFolder);
+            childFolders[part] = newFolder;
+            folderIndexByPath[currentPath] = <String, FolderNode>{};
             currentNode = newFolder;
           } else {
-            currentNode = currentNode.children[childIdx] as FolderNode;
+            currentNode = existingFolder;
           }
         }
       }
@@ -732,11 +1787,13 @@ class AudioProvider with ChangeNotifier {
     }
 
     final topLevel = <LibraryNode>[];
+    var leafFolderCount = 0;
 
-    // Convert root map to list and sort them
     final roots = rootNodes.values.toList();
     for (final root in roots) {
       sortFolder(root);
+      _cacheFolderTreeMetrics(root);
+      leafFolderCount += root.leafFolderCount;
       topLevel.add(root);
     }
 
@@ -750,7 +1807,10 @@ class AudioProvider with ChangeNotifier {
     );
     topLevel.addAll(singleFiles);
 
-    return topLevel;
+    return _LibraryTreeSnapshot(
+      tree: List<LibraryNode>.unmodifiable(topLevel),
+      leafFolderCount: leafFolderCount,
+    );
   }
 
   String _resolveRootNodeName(String rootPath, MusicTrack track) {
@@ -826,7 +1886,7 @@ class AudioProvider with ChangeNotifier {
 
   bool _looksLikeMojibake(String value) {
     const mojibakePattern =
-        r'[ÃÂÅÆÇÐÑØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõöøùúûüýþÿ�]';
+        r'[\\u00C0-\\u00FF]{2,}|[\\u4E00-\\u9FFF][\\u0080-\\u00FF]';
     return RegExp(mojibakePattern).hasMatch(value);
   }
 
@@ -864,19 +1924,133 @@ class AudioProvider with ChangeNotifier {
     return part;
   }
 
-  MusicTrack? trackByPath(String trackPath) {
-    for (final track in _library) {
-      if (track.path == trackPath) return track;
+  void _cacheFolderTreeMetrics(FolderNode folder) {
+    var totalTrackCount = 0;
+    var childLeafFolderCount = 0;
+    var hasChildFolder = false;
+    MusicTrack? firstTrack;
+
+    for (final child in folder.children) {
+      if (child is TrackNode) {
+        totalTrackCount++;
+        firstTrack ??= child.track;
+        continue;
+      }
+      if (child is FolderNode) {
+        hasChildFolder = true;
+        _cacheFolderTreeMetrics(child);
+        totalTrackCount += child.totalTrackCount;
+        childLeafFolderCount += child.leafFolderCount;
+        firstTrack ??= child.firstTrack;
+      }
     }
-    return null;
+
+    folder.cacheTreeMetrics(
+      totalTrackCount: totalTrackCount,
+      leafFolderCount: hasChildFolder ? childLeafFolderCount : 1,
+      firstTrack: firstTrack,
+    );
+  }
+
+  MusicTrack? trackByPath(String trackPath) => _libraryByPath[trackPath];
+
+  PlaybackSession? sessionById(String sessionId) => _sessions[sessionId];
+  String? sessionTrackPath(String sessionId) =>
+      _sessions[sessionId]?.currentTrackPath;
+  bool isTrackActive(String trackPath) =>
+      _sessions.values.any((session) => session.currentTrackPath == trackPath);
+
+  Future<SubtitleTrack?> subtitleTrackForPath(String trackPath) {
+    return _subtitleTrackFutures.putIfAbsent(trackPath, () async {
+      final subtitleTrack = await loadSubtitleTrackForAudio(trackPath);
+      _subtitleTracks[trackPath] = subtitleTrack;
+
+      var shouldRefreshNotification = false;
+      for (final session in _sessions.values) {
+        if (session.currentTrackPath != trackPath) continue;
+        final changed = _refreshNotificationSubtitleForSession(
+          session,
+          syncNotification: false,
+        );
+        if (changed && _notificationFocusedSession?.id == session.id) {
+          shouldRefreshNotification = true;
+        }
+      }
+
+      if (shouldRefreshNotification) {
+        _syncNotificationState();
+        notifyListeners();
+      }
+      return subtitleTrack;
+    });
+  }
+
+  String? subtitleTextForTrackAt(
+    String trackPath,
+    Duration position, {
+    SubtitleTrack? subtitleTrack,
+  }) {
+    final resolvedTrack = subtitleTrack;
+    final cue = resolvedTrack?.cueAt(position);
+    if (cue == null) return null;
+    final text = cue.text.trim();
+    return text.isEmpty ? null : text;
+  }
+
+  String? _notificationSubtitleForSession(PlaybackSession session) {
+    _ensureSubtitleTrackLoaded(session.currentTrackPath);
+    return subtitleTextForTrackAt(
+      session.currentTrackPath,
+      session.player.position,
+      subtitleTrack: _subtitleTracks[session.currentTrackPath],
+    );
+  }
+
+  void _ensureSubtitleTrackLoaded(String trackPath) {
+    if (_subtitleTracks.containsKey(trackPath) ||
+        _subtitleTrackFutures.containsKey(trackPath)) {
+      return;
+    }
+    unawaited(subtitleTrackForPath(trackPath));
+  }
+
+  bool _refreshNotificationSubtitleForSession(
+    PlaybackSession session, {
+    Duration? position,
+    bool syncNotification = true,
+  }) {
+    final trackPath = session.currentTrackPath;
+    _ensureSubtitleTrackLoaded(trackPath);
+    final nextText = subtitleTextForTrackAt(
+      trackPath,
+      position ?? session.player.position,
+      subtitleTrack: _subtitleTracks[trackPath],
+    );
+    final previousText = _notificationSubtitleTexts[session.id];
+    final previousTrackPath = _notificationSubtitleTrackPaths[session.id];
+    if (previousTrackPath == trackPath && previousText == nextText) {
+      return false;
+    }
+
+    _notificationSubtitleTexts[session.id] = nextText;
+    _notificationSubtitleTrackPaths[session.id] = trackPath;
+
+    if (syncNotification && _notificationFocusedSession?.id == session.id) {
+      _syncNotificationState();
+    }
+    return true;
+  }
+
+  void _clearNotificationSubtitleForSession(String sessionId) {
+    _notificationSubtitleTexts.remove(sessionId);
+    _notificationSubtitleTrackPaths.remove(sessionId);
   }
 
   /// Returns all tracks that belong to the same folder group as the given track.
   List<MusicTrack> tracksInSameGroup(String trackPath) {
     final track = trackByPath(trackPath);
     if (track == null) return [];
-    return _library.where((t) => t.groupKey == track.groupKey).toList()
-      ..sort(getTrackComparator);
+    return _tracksByGroup[track.groupKey] ?? const <MusicTrack>[];
   }
 
   // ---------------------------------------------------------------------------
@@ -884,31 +2058,64 @@ class AudioProvider with ChangeNotifier {
   // ---------------------------------------------------------------------------
 
   Future<void> spawnSession(MusicTrack track) async {
+    final session = _createSessionForTrack(track);
+    _registerSession(session);
+    _scheduleSessionPersistence();
+    unawaited(
+      _enqueueSessionPreparation(session, nextPath: track.path, autoPlay: true),
+    );
+  }
+
+  PlaybackSession _createSessionForTrack(
+    MusicTrack track, {
+    SessionLoopMode loopMode = SessionLoopMode.folderSequential,
+    double volume = 1.0,
+  }) {
     final player = AudioPlayer(
       handleInterruptions: false,
       handleAudioSessionActivation: false,
     );
-    final session = PlaybackSession(
-      id: 'session_${++_sessionSeed}',
+    return PlaybackSession(
+      id: _nextSessionId(),
       player: player,
       currentTrackPath: track.path,
-      loopMode: SessionLoopMode.folderSequential,
-      nonSingleLoopMode: SessionLoopMode.folderSequential,
-      volume: 1.0,
+      loopMode: loopMode,
+      nonSingleLoopMode: loopMode == SessionLoopMode.single
+          ? SessionLoopMode.folderSequential
+          : loopMode,
+      volume: volume,
       createdAt: DateTime.now(),
       state: player.playerState,
-    );
+    )..isLoading = true;
+  }
 
+  void _registerSession(PlaybackSession session) {
     _sessions[session.id] = session;
-    // Insert at the front of session order (newest first in display)
+    _notificationFocusSessionId = session.id;
     _sessionOrder.insert(0, session.id);
+    _markActiveSessionsDirty();
     _bindSessionListeners(session);
+    _syncNotificationState();
     notifyListeners();
+  }
 
-    // Creating a session from library actions should start playback immediately.
-    await _prepareAndPlay(session, nextPath: track.path, autoPlay: true);
-    unawaited(_saveSessionState());
-    unawaited(_saveSessionOrder());
+  Future<void> _enqueueSessionPreparation(
+    PlaybackSession session, {
+    required String nextPath,
+    required bool autoPlay,
+  }) {
+    _sessionPreparationQueue = _sessionPreparationQueue.catchError((_) {}).then(
+      (_) async {
+        if (!_sessions.containsKey(session.id)) return;
+        await _prepareAndPlay(
+          session,
+          nextPath: nextPath,
+          autoPlay: autoPlay,
+          markLoading: false,
+        );
+      },
+    );
+    return _sessionPreparationQueue;
   }
 
   void _bindSessionListeners(PlaybackSession session) {
@@ -918,6 +2125,7 @@ class AudioProvider with ChangeNotifier {
       final previousProcessing = session.state.processingState;
       session.state = state;
       _syncKeepCpuAwake();
+      _syncNotificationState();
       notifyListeners();
 
       // Only trigger auto-advance when:
@@ -934,24 +2142,59 @@ class AudioProvider with ChangeNotifier {
       }
     });
     session.subscriptions.add(stateSub);
+
+    final positionSub = session.player.positionStream.listen((position) {
+      if (!_sessions.containsKey(session.id)) return;
+      if (_notificationFocusedSession?.id != session.id) return;
+      final changed = _refreshNotificationSubtitleForSession(
+        session,
+        position: position,
+        syncNotification: false,
+      );
+      _scheduleFocusedNotificationRefresh(session.id, immediate: changed);
+    });
+    session.subscriptions.add(positionSub);
+
+    final durationSub = session.player.durationStream.listen((_) {
+      if (!_sessions.containsKey(session.id)) return;
+      _scheduleFocusedNotificationRefresh(session.id, immediate: true);
+    });
+    session.subscriptions.add(durationSub);
+
+    final bufferedPositionSub = session.player.bufferedPositionStream.listen((
+      _,
+    ) {
+      if (!_sessions.containsKey(session.id)) return;
+      _scheduleFocusedNotificationRefresh(session.id);
+    });
+    session.subscriptions.add(bufferedPositionSub);
   }
 
   Future<void> _prepareAndPlay(
     PlaybackSession session, {
     required String nextPath,
     bool autoPlay = true,
+    bool markLoading = true,
   }) async {
     if (!_sessions.containsKey(session.id)) return;
 
     // Bump the generation counter so any stale completion callbacks from the
     // previous source are ignored.
     session.loadGeneration++;
-    session.isLoading = true;
-    final willLoadNewAudio = session.loadedPath != nextPath;
-    notifyListeners();
+    if (markLoading) {
+      session.isLoading = true;
+      notifyListeners();
+    }
+    var prepared = false;
 
     try {
       session.currentTrackPath = nextPath;
+      _ensureSubtitleTrackLoaded(nextPath);
+      _refreshNotificationSubtitleForSession(
+        session,
+        position: Duration.zero,
+        syncNotification: false,
+      );
       final uri = nextPath.startsWith('content://')
           ? Uri.parse(nextPath)
           : Uri.file(nextPath);
@@ -971,26 +2214,22 @@ class AudioProvider with ChangeNotifier {
             ? LoopMode.one
             : LoopMode.off,
       );
+      prepared = true;
     } catch (e) {
       debugPrint('AudioProvider._prepareAndPlay error: $e');
     } finally {
       if (_sessions.containsKey(session.id)) {
         session.isLoading = false;
+        _syncNotificationState();
         notifyListeners();
       }
     }
     // Fire play() without awaiting: on Android with handleAudioSessionActivation=false
     // the Future never resolves, which would permanently block the finally block above.
-    if (_sessions.containsKey(session.id) && autoPlay) {
-      unawaited(session.player.play());
-      _syncKeepCpuAwake();
-      // Trigger mode: only restart countdown when a new audio source starts.
-      if (_timerMode == TimerMode.trigger &&
-          _timerDuration != null &&
-          willLoadNewAudio) {
-        _resetAndStartCountdown();
-      }
+    if (_sessions.containsKey(session.id) && autoPlay && prepared) {
+      await _startSessionPlayback(session, shouldStartTriggerCountdown: true);
     } else if (_sessions.containsKey(session.id)) {
+      _syncNotificationState();
       _syncKeepCpuAwake();
     }
   }
@@ -1003,38 +2242,56 @@ class AudioProvider with ChangeNotifier {
       await session.player.pause();
     } else {
       if (session.state.processingState == ProcessingState.completed) {
-        final replayingSameSource =
-            session.loadedPath == session.currentTrackPath;
         await _prepareAndPlay(session, nextPath: session.currentTrackPath);
-        // Trigger mode: replaying the same completed track from playlist
-        // should also start/restart countdown.
-        if (replayingSameSource &&
-            _timerMode == TimerMode.trigger &&
-            _timerDuration != null) {
-          _resetAndStartCountdown();
-        }
       } else {
         // Keep this non-blocking: with handleAudioSessionActivation=false on
         // some Android devices play() Future may never complete.
-        unawaited(session.player.play());
-        // Trigger mode: tapping play in playlist should also start/restart countdown.
-        if (_timerMode == TimerMode.trigger && _timerDuration != null) {
-          _resetAndStartCountdown();
-        }
+        await _startSessionPlayback(session, shouldStartTriggerCountdown: true);
       }
     }
   }
 
   Future<void> removeSession(String sessionId) async {
-    final session = _sessions.remove(sessionId);
-    if (session != null) {
+    await _removeSessions([sessionId]);
+  }
+
+  Future<void> _removeSessions(
+    Iterable<String> sessionIds, {
+    bool persist = true,
+    bool notify = true,
+  }) async {
+    final removedSessions = <PlaybackSession>[];
+    var removedAny = false;
+
+    for (final sessionId in LinkedHashSet<String>.from(sessionIds)) {
+      final session = _sessions.remove(sessionId);
+      if (session == null) continue;
+      removedAny = true;
+      removedSessions.add(session);
+      _clearNotificationSubtitleForSession(sessionId);
+      if (_notificationFocusSessionId == sessionId) {
+        _notificationFocusSessionId = null;
+      }
       _sessionOrder.remove(sessionId);
-      await session.player.stop();
-      session.dispose();
-      _syncKeepCpuAwake();
+    }
+
+    if (!removedAny) return;
+
+    _markActiveSessionsDirty();
+    await Future.wait(
+      removedSessions.map((session) async {
+        await session.player.stop();
+        session.dispose();
+      }),
+    );
+    _syncKeepCpuAwake();
+    _syncNotificationState();
+    if (notify) {
       notifyListeners();
-      unawaited(_saveSessionState());
-      unawaited(_saveSessionOrder());
+    }
+    if (persist) {
+      _scheduleSaveSessionState();
+      _scheduleSaveSessionOrder();
     }
   }
 
@@ -1051,8 +2308,9 @@ class AudioProvider with ChangeNotifier {
     await session.player.setLoopMode(
       mode == SessionLoopMode.single ? LoopMode.one : LoopMode.off,
     );
+    _syncNotificationState();
     notifyListeners();
-    unawaited(_saveSessionState());
+    _scheduleSaveSessionState();
   }
 
   bool _isShuffleMode(SessionLoopMode mode) {
@@ -1106,19 +2364,41 @@ class AudioProvider with ChangeNotifier {
     await setSessionLoopMode(sessionId, nextMode);
   }
 
-  Future<void> setSessionVolume(String sessionId, double volume) async {
+  Future<void> setSessionVolume(
+    String sessionId,
+    double volume, {
+    bool persist = true,
+    bool notify = true,
+  }) async {
     final session = _sessions[sessionId];
     if (session == null) return;
-    session.volume = volume.clamp(0.0, 1.0);
+    final nextVolume = volume.clamp(0.0, 1.0);
+    if ((session.volume - nextVolume).abs() < 0.001) {
+      if (persist) {
+        _scheduleSaveSessionState();
+      }
+      return;
+    }
+    session.volume = nextVolume;
     await session.player.setVolume(session.volume);
-    notifyListeners();
-    unawaited(_saveSessionState());
+    if (notify) {
+      notifyListeners();
+    }
+    if (persist) {
+      _scheduleSaveSessionState();
+    }
   }
 
   Future<void> seekSession(String sessionId, Duration position) async {
     final session = _sessions[sessionId];
     if (session != null) {
       await session.player.seek(position);
+      _refreshNotificationSubtitleForSession(
+        session,
+        position: position,
+        syncNotification: false,
+      );
+      _scheduleFocusedNotificationRefresh(session.id, immediate: true);
     }
   }
 
@@ -1127,7 +2407,7 @@ class AudioProvider with ChangeNotifier {
     final session = _sessions[sessionId];
     if (session == null || session.isLoading) return;
     await _prepareAndPlay(session, nextPath: newPath);
-    unawaited(_saveSessionState());
+    _scheduleSaveSessionState();
   }
 
   /// Skip to the next track according to the session's current loop mode.
@@ -1147,6 +2427,12 @@ class AudioProvider with ChangeNotifier {
     // If more than 3 s into the track, just restart it.
     if ((session.player.position.inSeconds) > 3) {
       await session.player.seek(Duration.zero);
+      _refreshNotificationSubtitleForSession(
+        session,
+        position: Duration.zero,
+        syncNotification: false,
+      );
+      _scheduleFocusedNotificationRefresh(session.id, immediate: true);
       return;
     }
     final prevPath = _nextPathFor(session, forward: false);
@@ -1161,10 +2447,7 @@ class AudioProvider with ChangeNotifier {
   }
 
   Future<void> clearAllSessions() async {
-    final ids = _sessions.keys.toList();
-    for (final id in ids) {
-      await removeSession(id);
-    }
+    await _removeSessions(_sessions.keys.toList());
   }
 
   // ---------------------------------------------------------------------------
@@ -1181,23 +2464,32 @@ class AudioProvider with ChangeNotifier {
     _timerRemaining = duration;
     _timerEndsAt = null;
     _timerActive = false;
+    _timerWaitingForPlayback = mode == TimerMode.trigger;
+    if (mode == TimerMode.trigger && _hasPlayingSession) {
+      startCountdown();
+      return;
+    }
     _syncKeepCpuAwake();
     notifyListeners();
+    unawaited(_saveTimerRuntime());
   }
 
   /// Start the countdown immediately (used for manual mode and internally).
   void startCountdown() {
     if (_timerDuration == null || _timerActive) return;
+    _countdownTimer?.cancel();
+    final generation = ++_timerGeneration;
     _timerActive = true;
+    _timerWaitingForPlayback = false;
     _timerRemaining = _timerDuration;
     _timerEndsAt = DateTime.now().add(_timerDuration!);
-    _countdownTimer?.cancel();
-    _countdownTimer = Timer.periodic(
-      const Duration(seconds: 1),
-      (_) => _tickCountdown(),
-    );
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (generation != _timerGeneration) return;
+      _tickCountdown();
+    });
     _syncKeepCpuAwake();
     notifyListeners();
+    unawaited(_saveTimerRuntime());
   }
 
   /// Cancel a running or configured timer.
@@ -1207,26 +2499,34 @@ class AudioProvider with ChangeNotifier {
     _timerDuration = null;
     _timerRemaining = null;
     _timerEndsAt = null;
+    _timerWaitingForPlayback = false;
     _pausedByTimerPaths.clear();
     _syncKeepCpuAwake();
     notifyListeners();
+    unawaited(_saveTimerRuntime());
   }
 
   void _cancelTimerInternal() {
+    _timerGeneration++;
     _countdownTimer?.cancel();
     _countdownTimer = null;
     _timerEndsAt = null;
     _autoResumeTimer?.cancel();
     _autoResumeTimer = null;
+    _autoResumeAt = null;
     _timerActive = false;
+    _timerWaitingForPlayback = false;
     _syncKeepCpuAwake();
+    unawaited(_saveTimerRuntime());
   }
 
   void _onTimerExpired() {
+    _timerGeneration++;
     _timerActive = false;
     _countdownTimer?.cancel();
     _countdownTimer = null;
     _timerEndsAt = null;
+    _timerWaitingForPlayback = false;
 
     // Remember which sessions were playing so we can resume them
     _pausedByTimerPaths.clear();
@@ -1245,52 +2545,102 @@ class AudioProvider with ChangeNotifier {
 
     // Schedule auto-resume at the configured clock time if enabled
     if (_autoResumeEnabled) {
-      _autoResumeTimer?.cancel();
-      final delay = _delayUntilClockTime(_autoResumeHour, _autoResumeMinute);
-      _autoResumeTimer = Timer(delay, _onAutoResume);
+      _scheduleAutoResumeTimer(
+        _nextClockTime(_autoResumeHour, _autoResumeMinute),
+      );
     }
     _syncKeepCpuAwake();
+    unawaited(_saveTimerRuntime());
   }
 
   void _onAutoResume() {
     _autoResumeTimer = null;
+    _autoResumeAt = null;
+    unawaited(_saveTimerRuntime());
+    unawaited(_resumeTimerPausedSessions());
+  }
+
+  void _resetTimerAfterAutoResumeSuccess() {
+    _timerMode = null;
+    _timerDuration = null;
+    _timerActive = false;
+    _timerRemaining = null;
+    _timerEndsAt = null;
+    _timerWaitingForPlayback = false;
+  }
+
+  Future<void> _resumeTimerPausedSessions() async {
+    final activated = await _activateAudioSessionForPlayback();
+    if (!activated) return;
+
+    final resumableSessions = _sessions.values
+        .where((s) => _pausedByTimerPaths.contains(s.currentTrackPath))
+        .toList();
+
+    if (resumableSessions.isEmpty) {
+      _pausedByTimerPaths.clear();
+      _syncKeepCpuAwake();
+      notifyListeners();
+      await _saveTimerRuntime();
+      return;
+    }
+
     // Resume sessions that were paused by the timer
-    for (final s in _sessions.values) {
-      if (_pausedByTimerPaths.contains(s.currentTrackPath)) {
-        s.player.play();
-      }
+    for (final session in resumableSessions) {
+      await _startSessionPlayback(session, shouldStartTriggerCountdown: false);
     }
     _pausedByTimerPaths.clear();
+    _autoResumeAt = null;
+    _resetTimerAfterAutoResumeSuccess();
     _syncKeepCpuAwake();
     notifyListeners();
+    await _saveTimerRuntime();
   }
 
   void setAutoResume(bool enabled, int hour, int minute) {
     _autoResumeEnabled = enabled;
     _autoResumeHour = hour;
     _autoResumeMinute = minute;
+    if (!enabled) {
+      _autoResumeTimer?.cancel();
+      _autoResumeTimer = null;
+      _autoResumeAt = null;
+    } else if (_pausedByTimerPaths.isNotEmpty) {
+      _scheduleAutoResumeTimer(_nextClockTime(hour, minute));
+    }
     _syncKeepCpuAwake();
     notifyListeners();
     unawaited(_saveTimerSettings());
+    unawaited(_saveTimerRuntime());
   }
 
-  /// Returns the Duration until the next occurrence of [hour]:[minute].
-  /// If that time has already passed today, schedules for tomorrow.
-  Duration _delayUntilClockTime(int hour, int minute) {
+  DateTime _nextClockTime(int hour, int minute) {
     final now = DateTime.now();
     var target = DateTime(now.year, now.month, now.day, hour, minute);
     if (!target.isAfter(now)) {
       target = target.add(const Duration(days: 1));
     }
-    return target.difference(now);
+    return target;
   }
 
-  /// Restart countdown from _timerDuration (cancels any in-progress timer).
-  void _resetAndStartCountdown() {
-    _countdownTimer?.cancel();
-    _countdownTimer = null;
-    _timerEndsAt = null;
-    _timerActive = false;
+  void _scheduleAutoResumeTimer(DateTime target) {
+    _autoResumeTimer?.cancel();
+    _autoResumeAt = target;
+    final delay = target.difference(DateTime.now());
+    if (delay <= Duration.zero) {
+      _onAutoResume();
+      return;
+    }
+    _autoResumeTimer = Timer(delay, _onAutoResume);
+  }
+
+  void _maybeStartTriggerCountdown() {
+    if (_timerMode != TimerMode.trigger ||
+        _timerDuration == null ||
+        _timerActive ||
+        !_timerWaitingForPlayback) {
+      return;
+    }
     startCountdown();
   }
 
@@ -1311,28 +2661,139 @@ class AudioProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  bool get _shouldKeepCpuAwake {
-    final anyPlaying = _sessions.values.any((s) => s.state.playing);
-    return anyPlaying || _timerActive;
+  bool get _hasPlayingSession => _sessions.values.any((s) => s.state.playing);
+
+  String _nextSessionId() {
+    _sessionSeed += 1;
+    return 'session_${DateTime.now().microsecondsSinceEpoch}_$_sessionSeed';
   }
+
+  bool get _hasPlaybackToKeepAlive =>
+      _sessions.values.any((s) => s.state.playing || s.isLoading);
+
+  bool get _hasRetainedPlaybackSession => _sessions.isNotEmpty;
+
+  bool get _hasPendingAutoResume =>
+      _autoResumeAt != null && _pausedByTimerPaths.isNotEmpty;
 
   void _syncKeepCpuAwake() {
-    final shouldKeepAwake = _shouldKeepCpuAwake;
-    if (_keepCpuAwake == shouldKeepAwake) return;
+    final hasPlayback = _hasPlaybackToKeepAlive;
+    final hasTimer =
+        _timerActive || _timerWaitingForPlayback || _hasPendingAutoResume;
+    final shouldKeepAwake = hasPlayback || hasTimer;
+    if (_keepCpuAwake == shouldKeepAwake &&
+        _keepAliveHasPlayback == hasPlayback &&
+        _keepAliveHasTimer == hasTimer) {
+      return;
+    }
     _keepCpuAwake = shouldKeepAwake;
-    unawaited(_setKeepCpuAwake(shouldKeepAwake));
+    _keepAliveHasPlayback = hasPlayback;
+    _keepAliveHasTimer = hasTimer;
+    unawaited(
+      _setKeepCpuAwake(
+        shouldKeepAwake,
+        hasActivePlayback: hasPlayback,
+        hasActiveTimer: hasTimer,
+      ),
+    );
+    if (!hasPlayback && !_hasRetainedPlaybackSession) {
+      unawaited(_deactivateAudioSession());
+    }
   }
 
-  Future<void> _setKeepCpuAwake(bool enabled) async {
+  Future<void> _setKeepCpuAwake(
+    bool enabled, {
+    required bool hasActivePlayback,
+    required bool hasActiveTimer,
+  }) async {
     try {
       await _powerChannel.invokeMethod<void>('setKeepCpuAwake', {
         'enabled': enabled,
+        'hasActivePlayback': hasActivePlayback,
+        'hasActiveTimer': hasActiveTimer,
       });
     } on MissingPluginException {
       // Non-Android platforms don't expose this channel.
     } catch (e) {
       debugPrint('AudioProvider._setKeepCpuAwake error: $e');
     }
+  }
+
+  Future<bool> _activateAudioSessionForPlayback() async {
+    try {
+      final audioSession = await AudioSession.instance;
+      return await audioSession.setActive(true);
+    } catch (e) {
+      debugPrint('AudioProvider._activateAudioSessionForPlayback error: $e');
+      return true;
+    }
+  }
+
+  Future<void> _deactivateAudioSession() async {
+    try {
+      final audioSession = await AudioSession.instance;
+      await audioSession.setActive(false);
+    } catch (e) {
+      debugPrint('AudioProvider._deactivateAudioSession error: $e');
+    }
+  }
+
+  Future<void> _startSessionPlayback(
+    PlaybackSession session, {
+    required bool shouldStartTriggerCountdown,
+  }) async {
+    if (!_sessions.containsKey(session.id)) return;
+    if (!_multiThreadPlaybackEnabled) {
+      await _enforceSingleThreadPlayback(preferredSessionId: session.id);
+    }
+    if (!_sessions.containsKey(session.id)) return;
+    final activated = await _activateAudioSessionForPlayback();
+    if (!_sessions.containsKey(session.id)) return;
+    if (!activated) {
+      debugPrint(
+        'AudioProvider._startSessionPlayback: audio session activation '
+        'returned false; continuing playback attempt.',
+      );
+    }
+
+    _notificationFocusSessionId = session.id;
+    unawaited(session.player.play());
+    _syncKeepCpuAwake();
+    if (shouldStartTriggerCountdown) {
+      _maybeStartTriggerCountdown();
+    }
+  }
+
+  Future<void> _enforceSingleThreadPlayback({
+    String? preferredSessionId,
+  }) async {
+    final keepSessionId =
+        (preferredSessionId != null &&
+            _sessions.containsKey(preferredSessionId))
+        ? preferredSessionId
+        : _preferredSingleSessionId;
+    if (keepSessionId == null) return;
+
+    final sessionsToPause = _sessions.values
+        .where(
+          (session) => session.id != keepSessionId && session.state.playing,
+        )
+        .toList(growable: false);
+    if (sessionsToPause.isEmpty) return;
+
+    await Future.wait(sessionsToPause.map((session) => session.player.pause()));
+    _syncKeepCpuAwake();
+    _syncNotificationState();
+    notifyListeners();
+  }
+
+  String? get _preferredSingleSessionId {
+    for (final session in activeSessions) {
+      if (session.state.playing) return session.id;
+    }
+    final sessions = activeSessions;
+    if (sessions.isEmpty) return null;
+    return sessions.first.id;
   }
 
   /// Reorder sessions in the display list.
@@ -1342,8 +2803,10 @@ class AudioProvider with ChangeNotifier {
     if (newIndex > oldIndex) newIndex -= 1;
     final moved = _sessionOrder.removeAt(oldIndex);
     _sessionOrder.insert(newIndex, moved);
+    _markActiveSessionsDirty();
+    _syncNotificationState();
     notifyListeners();
-    unawaited(_saveSessionOrder());
+    _scheduleSaveSessionOrder();
   }
 
   // ---------------------------------------------------------------------------
@@ -1362,10 +2825,10 @@ class AudioProvider with ChangeNotifier {
     if (nextPath == null) return;
 
     if (nextPath == session.currentTrackPath) {
-      // Same track – just rewind and play (shouldn't happen for non-single modes
+      // Same track 闂?just rewind and play (shouldn't happen for non-single modes
       // unless there's only 1 track in the scope).
       await session.player.seek(Duration.zero);
-      await session.player.play();
+      await _startSessionPlayback(session, shouldStartTriggerCountdown: false);
     } else {
       await _prepareAndPlay(session, nextPath: nextPath);
     }
@@ -1383,7 +2846,9 @@ class AudioProvider with ChangeNotifier {
 
       case SessionLoopMode.crossRandom:
         if (forward) {
-          final all = _library.map((t) => t.path).toList();
+          final all = _sortedLibraryTracks
+              .map((track) => track.path)
+              .toList(growable: false);
           if (all.length == 1) return all.first;
           final rnd = Random();
           String candidate = all[rnd.nextInt(all.length)];
@@ -1400,8 +2865,7 @@ class AudioProvider with ChangeNotifier {
 
       case SessionLoopMode.folderSequential:
         final scope =
-            _library.where((t) => t.groupKey == currentTrack.groupKey).toList()
-              ..sort(getTrackComparator);
+            _tracksByGroup[currentTrack.groupKey] ?? const <MusicTrack>[];
         if (scope.isEmpty) return currentTrack.path;
         final idx = scope.indexWhere((t) => t.path == currentTrack.path);
         if (idx < 0) return scope.first.path;
@@ -1409,7 +2873,7 @@ class AudioProvider with ChangeNotifier {
         return scope[next].path;
 
       case SessionLoopMode.crossSequential:
-        final all = [..._library]..sort(getTrackComparator);
+        final all = _sortedLibraryTracks;
         final idx = all.indexWhere((t) => t.path == currentTrack.path);
         if (idx < 0) return all.first.path;
         final next = (idx + (forward ? 1 : -1) + all.length) % all.length;
@@ -1417,10 +2881,10 @@ class AudioProvider with ChangeNotifier {
 
       case SessionLoopMode.folderRandom:
         if (forward) {
-          final scope = _library
-              .where((t) => t.groupKey == currentTrack.groupKey)
-              .map((t) => t.path)
-              .toList();
+          final scope =
+              (_tracksByGroup[currentTrack.groupKey] ?? const <MusicTrack>[])
+                  .map((track) => track.path)
+                  .toList(growable: false);
           if (scope.isEmpty) return currentTrack.path;
           if (scope.length == 1) return scope.first;
           final rnd = Random();

@@ -1,23 +1,49 @@
+import 'package:audio_session/audio_session.dart';
+import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:provider/provider.dart';
 
 import 'i18n/app_language_provider.dart';
 import 'providers/audio_provider.dart';
 import 'screens/main_screen.dart';
+import 'services/playback_notification_handler.dart';
 import 'theme/theme_provider.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      systemNavigationBarColor: Colors.transparent,
+      systemNavigationBarDividerColor: Colors.transparent,
+      systemStatusBarContrastEnforced: false,
+      systemNavigationBarContrastEnforced: false,
+    ),
+  );
 
-  // just_audio_background is intentionally not initialized because this app
-  // supports concurrent sessions with multiple players.
+  final audioSession = await AudioSession.instance;
+  await audioSession.configure(const AudioSessionConfiguration.music());
+  final audioHandler = await AudioService.init(
+    builder: PlaybackNotificationHandler.new,
+    config: AudioServiceConfig(
+      androidNotificationChannelId: 'com.example.music_player.channel.playback',
+      androidNotificationChannelName: 'Playback',
+      androidNotificationOngoing: false,
+      androidStopForegroundOnPause: false,
+    ),
+  );
+
   runApp(
     MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => ThemeProvider()),
         ChangeNotifierProvider(create: (_) => AppLanguageProvider()),
-        ChangeNotifierProvider(create: (_) => AudioProvider()),
+        ChangeNotifierProvider(
+          create: (_) => AudioProvider(notificationHandler: audioHandler),
+        ),
       ],
       child: const MusicPlayerApp(),
     ),

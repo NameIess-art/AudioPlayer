@@ -12,6 +12,7 @@ import 'package:provider/provider.dart';
 
 import '../i18n/app_language_provider.dart';
 import '../providers/audio_provider.dart';
+import '../widgets/app_feedback.dart';
 import '../widgets/top_page_header.dart';
 
 class VideoConverterTab extends StatefulWidget {
@@ -28,6 +29,33 @@ class _VideoConverterTabState extends State<VideoConverterTab> {
   double _progress = 0.0;
   String _statusMessage = '';
   int _videoDurationMs = 0;
+
+  int _parseDurationMs(String? durationStr) {
+    if (durationStr == null || durationStr.isEmpty) return 0;
+    final seconds = double.tryParse(durationStr);
+    if (seconds == null || !seconds.isFinite || seconds <= 0) {
+      return 0;
+    }
+    return (seconds * 1000).round();
+  }
+
+  Future<String> _resolveOutputPath(
+    String outputDirectoryPath,
+    String fileNameNoExt,
+    String selectedFormat,
+  ) async {
+    var suffix = 0;
+    while (true) {
+      final candidateName = suffix == 0
+          ? '$fileNameNoExt.$selectedFormat'
+          : '$fileNameNoExt ($suffix).$selectedFormat';
+      final candidatePath = path.join(outputDirectoryPath, candidateName);
+      if (!await File(candidatePath).exists()) {
+        return candidatePath;
+      }
+      suffix++;
+    }
+  }
 
   Future<void> _pickVideoFile() async {
     final i18n = context.read<AppLanguageProvider>();
@@ -56,22 +84,22 @@ class _VideoConverterTabState extends State<VideoConverterTab> {
   Future<void> _getVideoDuration(String videoPath) async {
     final mediaInformation = await FFprobeKit.getMediaInformation(videoPath);
     final information = mediaInformation.getMediaInformation();
+    final durationMs = _parseDurationMs(information?.getDuration());
 
-    if (information != null) {
-      final durationStr = information.getDuration();
-      if (durationStr != null) {
-        setState(() {
-          _videoDurationMs = (double.parse(durationStr) * 1000).toInt();
-        });
-      }
-    }
+    if (!mounted) return;
+    setState(() {
+      _videoDurationMs = durationMs;
+    });
   }
 
   Future<void> _startConversion(AudioProvider provider) async {
     final i18n = context.read<AppLanguageProvider>();
     if (_selectedVideoPath == null || _outputDirectoryPath == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(i18n.tr('select_video_and_output'))),
+      showAppSnackBar(
+        context,
+        i18n.tr('select_video_and_output'),
+        tone: AppFeedbackTone.warning,
+        icon: Icons.video_library_rounded,
       );
       return;
     }
@@ -85,13 +113,11 @@ class _VideoConverterTabState extends State<VideoConverterTab> {
     final selectedFormat = provider.converterFormat;
     final selectedBitrate = provider.converterBitrate;
     final fileNameNoExt = path.basenameWithoutExtension(_selectedVideoPath!);
-    final outputFileName = '$fileNameNoExt.$selectedFormat';
-    final outputPath = path.join(_outputDirectoryPath!, outputFileName);
-
-    final outputFile = File(outputPath);
-    if (await outputFile.exists()) {
-      await outputFile.delete();
-    }
+    final outputPath = await _resolveOutputPath(
+      _outputDirectoryPath!,
+      fileNameNoExt,
+      selectedFormat,
+    );
 
     var command = '-i "$_selectedVideoPath" ';
 
@@ -174,6 +200,12 @@ class _VideoConverterTabState extends State<VideoConverterTab> {
     final provider = context.watch<AudioProvider>();
     final selectedFormat = provider.converterFormat;
     final selectedBitrate = provider.converterBitrate;
+    final bitrateEnabled = selectedFormat != 'wav' && selectedFormat != 'flac';
+    final descStyle = Theme.of(context).textTheme.bodySmall?.copyWith(
+      fontSize: 11,
+      height: 1.25,
+      color: Theme.of(context).colorScheme.onSurfaceVariant,
+    );
 
     return Scaffold(
       backgroundColor: Theme.of(context).colorScheme.surface,
@@ -210,6 +242,73 @@ class _VideoConverterTabState extends State<VideoConverterTab> {
               placeholder: i18n.tr('tap_select_output_dir'),
               value: _outputDirectoryPath,
               onTap: _isConverting ? null : _pickOutputDirectory,
+            ),
+            const SizedBox(height: 12),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.tune_rounded,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          i18n.tr('transcode_defaults'),
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w800),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _SelectField(
+                            label: i18n.tr('format'),
+                            value: selectedFormat,
+                            items: AudioProvider.converterFormats,
+                            displayBuilder: (item) => item.toUpperCase(),
+                            onChanged: (value) {
+                              if (value != null) {
+                                provider.setConverterSettings(format: value);
+                              }
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: _SelectField(
+                            label: i18n.tr('bitrate'),
+                            value: selectedBitrate,
+                            items: AudioProvider.converterBitrates,
+                            displayBuilder: (item) => item,
+                            enabled: bitrateEnabled,
+                            onChanged: (value) {
+                              if (value != null) {
+                                provider.setConverterSettings(bitrate: value);
+                              }
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      bitrateEnabled
+                          ? i18n.tr('bitrate_used')
+                          : i18n.tr('bitrate_not_used', {
+                              'format': selectedFormat.toUpperCase(),
+                            }),
+                      style: descStyle,
+                    ),
+                  ],
+                ),
+              ),
             ),
             const SizedBox(height: 12),
             Card(
@@ -379,6 +478,55 @@ class _PathPickerCard extends StatelessWidget {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SelectField extends StatelessWidget {
+  const _SelectField({
+    required this.label,
+    required this.value,
+    required this.items,
+    required this.onChanged,
+    required this.displayBuilder,
+    this.enabled = true,
+  });
+
+  final String label;
+  final String value;
+  final List<String> items;
+  final ValueChanged<String?> onChanged;
+  final String Function(String) displayBuilder;
+  final bool enabled;
+
+  @override
+  Widget build(BuildContext context) {
+    return InputDecorator(
+      decoration: InputDecoration(
+        labelText: label,
+        enabled: enabled,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          isExpanded: true,
+          value: value,
+          borderRadius: BorderRadius.circular(14),
+          menuMaxHeight: 320,
+          onChanged: enabled ? onChanged : null,
+          items: items
+              .map(
+                (item) => DropdownMenuItem<String>(
+                  value: item,
+                  child: Text(
+                    displayBuilder(item),
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+              )
+              .toList(),
         ),
       ),
     );

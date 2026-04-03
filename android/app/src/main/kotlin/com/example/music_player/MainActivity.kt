@@ -1,16 +1,29 @@
 package com.example.music_player
 
 import android.app.Activity
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.ComponentName
+import android.content.Context
 import android.content.ContentUris
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.provider.OpenableColumns
+import android.provider.Settings
+import android.graphics.Bitmap
+import android.util.LruCache
 import android.webkit.MimeTypeMap
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.documentfile.provider.DocumentFile
+import androidx.media.app.NotificationCompat.MediaStyle
 import com.ryanheise.audioservice.AudioServiceActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -21,12 +34,367 @@ import java.nio.charset.StandardCharsets
 import java.util.ArrayDeque
 import java.util.Locale
 
+private object PlaybackWakeLockController {
+    private var wakeLock: PowerManager.WakeLock? = null
+
+    @Synchronized
+    fun sync(context: Context, enabled: Boolean) {
+        if (enabled) {
+            acquire(context.applicationContext)
+        } else {
+            release()
+        }
+    }
+
+    private fun acquire(context: Context) {
+        if (wakeLock?.isHeld == true) return
+        try {
+            val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+            wakeLock = powerManager?.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "${context.packageName}:playback_keep_alive"
+            )?.apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        } catch (_: Exception) {
+            wakeLock = null
+        }
+    }
+
+    private fun release() {
+        val currentWakeLock = wakeLock ?: return
+        try {
+            if (currentWakeLock.isHeld) {
+                currentWakeLock.release()
+            }
+        } catch (_: RuntimeException) {
+            // Ignore stale wakelock state.
+        } finally {
+            wakeLock = null
+        }
+    }
+}
+
+private data class UnifiedPlaybackNotificationItem(
+    val id: String,
+    val title: String,
+    val subtitle: String?,
+    val description: String?,
+    val artPath: String?,
+    val playing: Boolean,
+    val hasPrevious: Boolean,
+    val hasNext: Boolean
+)
+
+private object UnifiedPlaybackNotificationController {
+    private const val channelId = "com.example.music_player.channel.playback"
+    private const val channelName = "Playback"
+    private const val channelDescription = "Playback notification controls"
+    private const val groupKey = "com.example.music_player.PLAYBACK_GROUP"
+    private const val summaryNotificationId = 11_225
+    private const val prefsName = "music_player_notifications"
+    private const val activeIdsKey = "active_notification_ids"
+    private val activeNotificationIds = linkedSetOf<Int>()
+    private val activeItemsById = linkedMapOf<String, UnifiedPlaybackNotificationItem>()
+    private val artCache = object : LruCache<String, Bitmap>(12) {}
+    private var lastSummarySignature: String? = null
+
+    @Synchronized
+    fun sync(
+        context: Context,
+        items: List<UnifiedPlaybackNotificationItem>,
+        showSummary: Boolean,
+        summaryText: String?,
+        summaryLines: List<String>
+    ) {
+        val manager = NotificationManagerCompat.from(context)
+        ensureChannel(context)
+
+        if (items.isEmpty()) {
+            clear(context)
+            return
+        }
+
+        val previousIds = buildSet {
+            addAll(activeNotificationIds)
+            addAll(loadPersistedNotificationIds(context))
+        }
+        val nextIds = mutableSetOf<Int>()
+        for (item in items) {
+            val notificationId = notificationIdFor(item.id)
+            if (activeItemsById[item.id] != item) {
+                manager.notify(notificationId, buildChildNotification(context, item))
+            }
+            nextIds.add(notificationId)
+        }
+
+        val summarySignature = if (showSummary) {
+            buildString {
+                append(summaryText.orEmpty())
+                append('\u0000')
+                append(summaryLines.joinToString("\n"))
+                append('\u0000')
+                append(items.size)
+            }
+        } else {
+            null
+        }
+        if (showSummary) {
+            if (summarySignature != lastSummarySignature) {
+                manager.notify(
+                    summaryNotificationId,
+                    buildSummaryNotification(context, items, summaryText, summaryLines)
+                )
+            }
+        } else {
+            manager.cancel(summaryNotificationId)
+        }
+
+        val staleIds = previousIds.filterNot(nextIds::contains)
+        staleIds.forEach(manager::cancel)
+        val activeSessionIds = items.mapTo(mutableSetOf()) { it.id }
+        activeItemsById.keys
+            .filterNot(activeSessionIds::contains)
+            .toList()
+            .forEach(activeItemsById::remove)
+        items.forEach { item ->
+            activeItemsById[item.id] = item
+        }
+
+        activeNotificationIds.apply {
+            clear()
+            addAll(nextIds)
+        }
+        lastSummarySignature = summarySignature
+        savePersistedNotificationIds(context, nextIds)
+    }
+
+    @Synchronized
+    fun clear(context: Context) {
+        val manager = NotificationManagerCompat.from(context)
+        val previousIds = buildSet {
+            addAll(activeNotificationIds)
+            addAll(loadPersistedNotificationIds(context))
+        }
+        previousIds.forEach(manager::cancel)
+        manager.cancel(summaryNotificationId)
+        activeNotificationIds.clear()
+        activeItemsById.clear()
+        lastSummarySignature = null
+        savePersistedNotificationIds(context, emptySet())
+    }
+
+    private fun ensureChannel(context: Context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            ?: return
+        val existing = manager.getNotificationChannel(channelId)
+        if (existing != null) return
+
+        val channel = NotificationChannel(
+            channelId,
+            channelName,
+            NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            description = channelDescription
+            setShowBadge(false)
+        }
+        manager.createNotificationChannel(channel)
+    }
+
+    private fun buildChildNotification(
+        context: Context,
+        item: UnifiedPlaybackNotificationItem
+    ): android.app.Notification {
+        val builder = NotificationCompat.Builder(context, channelId)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(item.title)
+            .setContentText(item.subtitle ?: item.description)
+            .setSubText(null)
+            .setContentIntent(buildLaunchIntent(context))
+            .setShowWhen(false)
+            .setOnlyAlertOnce(true)
+            .setSilent(true)
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
+            .setGroup(groupKey)
+            .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_SUMMARY)
+            .setSortKey("1_${item.title}_${item.id}")
+
+        resolveLargeIcon(item.artPath)?.let(builder::setLargeIcon)
+
+        val compactActionIndices = mutableListOf<Int>()
+        var actionIndex = 0
+
+        if (item.hasPrevious) {
+            builder.addAction(
+                android.R.drawable.ic_media_previous,
+                "Previous",
+                buildControlIntent(context, item.id, NotificationCommand.previous)
+            )
+            compactActionIndices.add(actionIndex)
+            actionIndex += 1
+        }
+        builder.addAction(
+            if (item.playing) {
+                android.R.drawable.ic_media_pause
+            } else {
+                android.R.drawable.ic_media_play
+            },
+            if (item.playing) "Pause" else "Play",
+            buildControlIntent(context, item.id, NotificationCommand.toggle)
+        )
+        compactActionIndices.add(actionIndex)
+        actionIndex += 1
+        if (item.hasNext) {
+            builder.addAction(
+                android.R.drawable.ic_media_next,
+                "Next",
+                buildControlIntent(context, item.id, NotificationCommand.next)
+            )
+            compactActionIndices.add(actionIndex)
+        }
+
+        val mediaStyle = MediaStyle()
+            .setShowActionsInCompactView(*compactActionIndices.toIntArray())
+        com.ryanheise.audioservice.AudioService
+            .getMediaSessionTokenCompat()
+            ?.let(mediaStyle::setMediaSession)
+        builder.setStyle(mediaStyle)
+        return builder.build()
+    }
+
+    private fun buildSummaryNotification(
+        context: Context,
+        items: List<UnifiedPlaybackNotificationItem>,
+        summaryText: String?,
+        summaryLines: List<String>
+    ): android.app.Notification {
+        val builder = NotificationCompat.Builder(context, channelId)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle("AudioPlayer")
+            .setContentText(summaryText ?: "${items.size} sessions")
+            .setContentIntent(buildLaunchIntent(context))
+            .setShowWhen(false)
+            .setOnlyAlertOnce(true)
+            .setSilent(true)
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
+            .setGroup(groupKey)
+            .setGroupSummary(true)
+            .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_SUMMARY)
+            .setSortKey("0_summary")
+
+        val inboxStyle = NotificationCompat.InboxStyle()
+            .setBigContentTitle("AudioPlayer")
+        if (summaryLines.isEmpty()) {
+            items.forEach { item ->
+                inboxStyle.addLine(item.title)
+            }
+        } else {
+            summaryLines.forEach(inboxStyle::addLine)
+        }
+        builder.setStyle(inboxStyle)
+        return builder.build()
+    }
+
+    private fun buildLaunchIntent(context: Context): PendingIntent? {
+        val launchIntent = context.packageManager
+            .getLaunchIntentForPackage(context.packageName)
+            ?.apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            }
+            ?: return null
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or (
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                PendingIntent.FLAG_IMMUTABLE
+            } else {
+                0
+            }
+        )
+        return PendingIntent.getActivity(context, 0, launchIntent, flags)
+    }
+
+    private fun buildControlIntent(
+        context: Context,
+        sessionId: String,
+        command: NotificationCommand
+    ): PendingIntent {
+        val intent = Intent(context, UnifiedPlaybackActionReceiver::class.java).apply {
+            action = command.actionName
+            putExtra("sessionId", sessionId)
+        }
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or (
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                PendingIntent.FLAG_IMMUTABLE
+            } else {
+                0
+            }
+        )
+        val requestCode = notificationIdFor(sessionId) + command.requestCodeOffset
+        return PendingIntent.getBroadcast(context, requestCode, intent, flags)
+    }
+
+    private fun loadPersistedNotificationIds(context: Context): Set<Int> {
+        return context
+            .getSharedPreferences(prefsName, Context.MODE_PRIVATE)
+            .getStringSet(activeIdsKey, emptySet())
+            ?.mapNotNull(String::toIntOrNull)
+            ?.toSet()
+            ?: emptySet()
+    }
+
+    private fun savePersistedNotificationIds(context: Context, ids: Set<Int>) {
+        context
+            .getSharedPreferences(prefsName, Context.MODE_PRIVATE)
+            .edit()
+            .putStringSet(activeIdsKey, ids.map(Int::toString).toSet())
+            .apply()
+    }
+
+    private fun resolveLargeIcon(artPath: String?): Bitmap? {
+        val path = artPath?.takeIf { it.isNotBlank() } ?: return null
+        artCache.get(path)?.let { return it }
+        val decoded = BitmapFactory.decodeFile(path) ?: return null
+        artCache.put(path, decoded)
+        return decoded
+    }
+
+    private fun notificationIdFor(sessionId: String): Int {
+        val hash = sessionId.hashCode()
+        val positiveHash = if (hash == Int.MIN_VALUE) 0 else kotlin.math.abs(hash)
+        return 20_000 + (positiveHash % 50_000)
+    }
+}
+
+private val supportedImageExtensions = setOf(
+    "jpg", "jpeg", "png", "webp", "bmp", "gif"
+)
+
+private val preferredCoverBasenames = listOf(
+    "cover", "folder", "front", "album", "artwork", "poster"
+)
+
+private enum class NotificationCommand(
+    val actionName: String,
+    val requestCodeOffset: Int
+) {
+    toggle("toggle_session_playback", 1),
+    previous("session_skip_previous", 2),
+    next("session_skip_next", 3);
+}
+
 class MainActivity : AudioServiceActivity() {
     private val fileCacheChannel = "music_player/file_cache"
     private val powerChannel = "music_player/power"
+    private val notificationsChannel = "music_player/notifications"
     private val pickAudioSourceRequestCode = 7001
     private var pendingPickAudioResult: MethodChannel.Result? = null
-    private var partialWakeLock: PowerManager.WakeLock? = null
     private val blockedExtensions = setOf(
         "vtt", "srt", "ass", "ssa", "lrc", "txt", "md", "json", "xml",
         "jpg", "jpeg", "png", "gif", "webp", "bmp", "heic", "heif",
@@ -41,7 +409,70 @@ class MainActivity : AudioServiceActivity() {
                 when (call.method) {
                     "setKeepCpuAwake" -> {
                         val enabled = call.argument<Boolean>("enabled") ?: false
-                        setKeepCpuAwake(enabled)
+                        val hasActivePlayback =
+                            call.argument<Boolean>("hasActivePlayback") ?: false
+                        val hasActiveTimer =
+                            call.argument<Boolean>("hasActiveTimer") ?: false
+                        syncPlaybackKeepAlive(
+                            enabled = enabled,
+                            hasActivePlayback = hasActivePlayback,
+                            hasActiveTimer = hasActiveTimer
+                        )
+                        result.success(null)
+                    }
+                    "isIgnoringBatteryOptimizations" -> {
+                        result.success(isIgnoringBatteryOptimizations())
+                    }
+                    "openBatteryOptimizationSettings" -> {
+                        result.success(openBatteryOptimizationSettings())
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, notificationsChannel)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "areNotificationsEnabled" -> {
+                        result.success(
+                            NotificationManagerCompat.from(this).areNotificationsEnabled()
+                        )
+                    }
+                    "openNotificationSettings" -> {
+                        result.success(openNotificationSettings())
+                    }
+                    "syncUnifiedPlaybackNotifications" -> {
+                        val rawItems =
+                            call.argument<List<Map<String, Any?>>>("items") ?: emptyList()
+                        val showSummary = call.argument<Boolean>("showSummary") ?: false
+                        val summaryText = call.argument<String>("summaryText")
+                        val summaryLines =
+                            call.argument<List<String>>("summaryLines") ?: emptyList()
+                        val items = rawItems.mapNotNull { raw ->
+                            val id = raw["id"] as? String ?: return@mapNotNull null
+                            val title = raw["title"] as? String ?: return@mapNotNull null
+                            UnifiedPlaybackNotificationItem(
+                                id = id,
+                                title = title,
+                                subtitle = raw["subtitle"] as? String,
+                                description = raw["description"] as? String,
+                                artPath = raw["artPath"] as? String,
+                                playing = raw["playing"] as? Boolean ?: false,
+                                hasPrevious = raw["hasPrevious"] as? Boolean ?: false,
+                                hasNext = raw["hasNext"] as? Boolean ?: false
+                            )
+                        }
+                        UnifiedPlaybackNotificationController.sync(
+                            this,
+                            items,
+                            showSummary,
+                            summaryText,
+                            summaryLines
+                        )
+                        result.success(null)
+                    }
+                    "clearUnifiedPlaybackNotifications" -> {
+                        UnifiedPlaybackNotificationController.clear(this)
                         result.success(null)
                     }
                     else -> result.notImplemented()
@@ -117,6 +548,28 @@ class MainActivity : AudioServiceActivity() {
                             }
                         }.start()
                     }
+                    "resolveTrackCover" -> {
+                        val trackPath = call.argument<String>("path")
+                        val groupKey = call.argument<String>("groupKey")
+                        if (trackPath.isNullOrBlank()) {
+                            result.error("invalid_args", "path is required", null)
+                            return@setMethodCallHandler
+                        }
+                        Thread {
+                            try {
+                                val coverPath = resolveTrackCover(trackPath, groupKey)
+                                runOnUiThread { result.success(coverPath) }
+                            } catch (e: Exception) {
+                                runOnUiThread {
+                                    result.error(
+                                        "cover_resolve_failed",
+                                        e.message ?: "unknown error",
+                                        null
+                                    )
+                                }
+                            }
+                        }.start()
+                    }
                     "pickAudioSource" -> {
                         launchPickAudioSource(result)
                     }
@@ -131,11 +584,6 @@ class MainActivity : AudioServiceActivity() {
             return
         }
         super.onActivityResult(requestCode, resultCode, data)
-    }
-
-    override fun onDestroy() {
-        releaseKeepCpuAwake()
-        super.onDestroy()
     }
 
     private fun launchPickAudioSource(result: MethodChannel.Result) {
@@ -258,39 +706,80 @@ class MainActivity : AudioServiceActivity() {
         }
     }
 
-    private fun setKeepCpuAwake(enabled: Boolean) {
-        if (!enabled) {
-            releaseKeepCpuAwake()
-            return
-        }
-        if (partialWakeLock?.isHeld == true) return
-
+    private fun syncPlaybackKeepAlive(
+        enabled: Boolean,
+        hasActivePlayback: Boolean,
+        hasActiveTimer: Boolean
+    ) {
         try {
-            val pm = getSystemService(POWER_SERVICE) as PowerManager
-            partialWakeLock = pm.newWakeLock(
-                PowerManager.PARTIAL_WAKE_LOCK,
-                "$packageName:audio_timer_lock"
-            ).apply {
-                setReferenceCounted(false)
-                acquire()
+            PlaybackWakeLockController.sync(applicationContext, enabled)
+        } catch (_: Exception) {
+            // Ignore keep-alive sync failures and let playback continue best-effort.
+        }
+    }
+
+    private fun openNotificationSettings(): Boolean {
+        return try {
+            val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                putExtra("android.provider.extra.APP_PACKAGE", packageName)
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
             }
-        } catch (_: SecurityException) {
-            partialWakeLock = null
-        } catch (_: RuntimeException) {
-            partialWakeLock = null
+            startActivity(intent)
+            true
+        } catch (_: Exception) {
+            try {
+                val fallbackIntent = Intent(
+                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.fromParts("package", packageName, null)
+                ).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                startActivity(fallbackIntent)
+                true
+            } catch (_: Exception) {
+                false
+            }
         }
     }
 
-    private fun releaseKeepCpuAwake() {
-        val lock = partialWakeLock ?: return
-        try {
-            if (lock.isHeld) lock.release()
-        } catch (_: RuntimeException) {
-            // Ignore stale wakelock state.
-        } finally {
-            partialWakeLock = null
+    private fun isIgnoringBatteryOptimizations(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            return true
+        }
+        val powerManager = getSystemService(POWER_SERVICE) as? PowerManager
+        return powerManager?.isIgnoringBatteryOptimizations(packageName) == true
+    }
+
+    private fun openBatteryOptimizationSettings(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            return false
+        }
+
+        return try {
+            val intent = Intent(
+                Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                Uri.parse("package:$packageName")
+            ).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            startActivity(intent)
+            true
+        } catch (_: Exception) {
+            try {
+                val fallbackIntent = Intent(
+                    Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS
+                ).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                startActivity(fallbackIntent)
+                true
+            } catch (_: Exception) {
+                false
+            }
         }
     }
+
     private data class ScannedTrack(
         val path: String,
         val title: String,
@@ -576,5 +1065,174 @@ class MainActivity : AudioServiceActivity() {
             return true
         }
         return mime.startsWith("audio/") || mime == "application/ogg"
+    }
+
+    private fun resolveTrackCover(trackPath: String, groupKey: String?): String? {
+        if (!trackPath.startsWith("content://")) {
+            return null
+        }
+
+        val rootTreeUri = when {
+            groupKey.isNullOrBlank() -> null
+            groupKey.contains("::") -> groupKey.substringBefore("::")
+            else -> groupKey
+        }?.takeIf { it.startsWith("content://") } ?: return null
+
+        val relativeDirectory = when {
+            groupKey.isNullOrBlank() -> ""
+            groupKey.contains("::") -> groupKey.substringAfter("::", "")
+            else -> ""
+        }
+
+        val treeRoot = DocumentFile.fromTreeUri(this, Uri.parse(rootTreeUri))
+            ?: DocumentFile.fromSingleUri(this, Uri.parse(rootTreeUri))
+            ?: return null
+        if (!treeRoot.exists()) return null
+
+        val candidateDirectories = resolveCandidateDocumentDirectories(
+            treeRoot,
+            relativeDirectory
+        )
+
+        candidateDirectories.forEach { directory ->
+            val cover = findPreferredCoverInDocumentDirectory(directory) ?: return@forEach
+            return cacheDocumentCover(cover, trackPath)
+        }
+        return null
+    }
+
+    private fun resolveCandidateDocumentDirectories(
+        root: DocumentFile,
+        relativeDirectory: String
+    ): List<DocumentFile> {
+        val visited = mutableListOf<DocumentFile>()
+        var current: DocumentFile = root
+        visited.add(current)
+        if (relativeDirectory.isBlank()) {
+            return visited.asReversed()
+        }
+        for (segment in relativeDirectory.split('/')) {
+            if (segment.isBlank()) continue
+            val next = current.listFiles().firstOrNull {
+                it.isDirectory && normalizeDisplayName(it.name?.trim().orEmpty()) == segment
+            } ?: break
+            current = next
+            visited.add(current)
+        }
+        return visited.asReversed()
+    }
+
+    private fun resolveRelativeDocumentDirectory(
+        root: DocumentFile,
+        relativeDirectory: String
+    ): DocumentFile? {
+        if (relativeDirectory.isBlank()) return root
+        var current: DocumentFile? = root
+        for (segment in relativeDirectory.split('/')) {
+            if (segment.isBlank()) continue
+            current = current?.listFiles()?.firstOrNull {
+                it.isDirectory && normalizeDisplayName(it.name?.trim().orEmpty()) == segment
+            } ?: return null
+        }
+        return current
+    }
+
+    private fun findPreferredCoverInDocumentDirectory(directory: DocumentFile): DocumentFile? {
+        val images = collectImageDocuments(directory)
+        if (images.isEmpty()) return null
+        return images.sortedWith { left, right ->
+            compareCoverNames(
+                normalizeDisplayName(left.name ?: left.uri.lastPathSegment ?: ""),
+                normalizeDisplayName(right.name ?: right.uri.lastPathSegment ?: "")
+            )
+        }.firstOrNull()
+    }
+
+    private fun collectImageDocuments(directory: DocumentFile): List<DocumentFile> {
+        return try {
+            val images = mutableListOf<DocumentFile>()
+            val pending = java.util.ArrayDeque<DocumentFile>()
+            pending.add(directory)
+            while (pending.isNotEmpty()) {
+                val current = pending.removeFirst()
+                for (child in current.listFiles()) {
+                    when {
+                        child.isDirectory -> pending.addLast(child)
+                        child.isFile && isSupportedImageDocument(child) -> images.add(child)
+                    }
+                }
+            }
+            images
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun isSupportedImageDocument(file: DocumentFile): Boolean {
+        val mime = file.type?.lowercase(Locale.US)
+        if (mime != null && mime.startsWith("image/")) {
+            return true
+        }
+        val extension = file.name
+            ?.substringAfterLast('.', "")
+            ?.lowercase(Locale.US)
+            .orEmpty()
+        return extension in supportedImageExtensions
+    }
+
+    private fun compareCoverNames(leftNameRaw: String, rightNameRaw: String): Int {
+        val leftName = leftNameRaw.substringBeforeLast('.', leftNameRaw).lowercase(Locale.US)
+        val rightName = rightNameRaw.substringBeforeLast('.', rightNameRaw).lowercase(Locale.US)
+        val scoreCompare = coverPriority(leftName).compareTo(coverPriority(rightName))
+        if (scoreCompare != 0) return scoreCompare
+        val nameCompare = leftName.compareTo(rightName)
+        if (nameCompare != 0) return nameCompare
+        return leftNameRaw.lowercase(Locale.US).compareTo(rightNameRaw.lowercase(Locale.US))
+    }
+
+    private fun coverPriority(baseName: String): Int {
+        val exactMatchIndex = preferredCoverBasenames.indexOf(baseName)
+        if (exactMatchIndex >= 0) {
+            return exactMatchIndex
+        }
+        for (i in preferredCoverBasenames.indices) {
+            if (baseName.contains(preferredCoverBasenames[i])) {
+                return 100 + i
+            }
+        }
+        return 200
+    }
+
+    private fun cacheDocumentCover(file: DocumentFile, trackPath: String): String? {
+        val extension = file.name
+            ?.substringAfterLast('.', "")
+            ?.ifBlank { "img" }
+            ?: "img"
+        val coverDir = File(cacheDir, "music_player_covers")
+        if (!coverDir.exists()) {
+            coverDir.mkdirs()
+        }
+        val outputFile = File(
+            coverDir,
+            "cover_${kotlin.math.abs(trackPath.hashCode())}.$extension"
+        )
+        if (outputFile.exists() && outputFile.length() > 0) {
+            return outputFile.absolutePath
+        }
+
+        return try {
+            contentResolver.openInputStream(file.uri)?.use { input ->
+                FileOutputStream(outputFile).use { output ->
+                    input.copyTo(output)
+                    output.flush()
+                }
+            } ?: return null
+            outputFile.absolutePath
+        } catch (_: Exception) {
+            if (outputFile.exists()) {
+                outputFile.delete()
+            }
+            null
+        }
     }
 }

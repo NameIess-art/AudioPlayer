@@ -1,6 +1,9 @@
+import 'dart:io';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 
 import '../i18n/app_language_provider.dart';
@@ -9,6 +12,10 @@ import 'library_tab.dart';
 import 'playlist_tab.dart';
 import 'settings_tab.dart';
 import 'timer_tab.dart';
+import '../widgets/active_session_carousel.dart';
+import '../widgets/app_feedback.dart';
+import '../widgets/confirm_action_dialog.dart';
+import '../widgets/mobile_overlay_inset.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -17,14 +24,24 @@ class MainScreen extends StatefulWidget {
   State<MainScreen> createState() => _MainScreenState();
 }
 
-class _MainScreenState extends State<MainScreen> {
-  static const Duration _pageTransitionDuration = Duration(milliseconds: 220);
-  static const Curve _pageTransitionCurve = Curves.easeOutCubic;
+class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
+  static const Duration _pageTransitionDuration = Duration(milliseconds: 300);
+  static const Curve _pageTransitionCurve = Curves.easeInOutCubic;
   static const double _desktopBreakpoint = 980;
+  static const Color _appleMusicAccent = Color(0xFFFF2D55);
+  static const MethodChannel _notificationsChannel = MethodChannel(
+    'music_player/notifications',
+  );
 
   int _currentIndex = 0;
   int? _previousIndex;
   int _transitionToken = 0;
+  int _transitionDirection = 1;
+  double _pageSwipeDelta = 0;
+  bool _notificationPermissionCheckDone = false;
+  bool _notificationPermissionCheckQueued = false;
+  bool _notificationSettingsDialogVisible = false;
+  bool _notificationSettingsOpened = false;
 
   final List<Widget> _pages = const [
     LibraryTab(),
@@ -50,8 +67,31 @@ class _MainScreenState extends State<MainScreen> {
     ),
   ];
 
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed || !_notificationSettingsOpened) {
+      return;
+    }
+    _notificationSettingsOpened = false;
+    _handleNotificationSettingsReturn();
+  }
+
   void _switchPage(int index) {
     if (index == _currentIndex) return;
+    Feedback.forTap(context);
+    _transitionDirection = index > _currentIndex ? 1 : -1;
     final token = ++_transitionToken;
     setState(() {
       _previousIndex = _currentIndex;
@@ -65,6 +105,146 @@ class _MainScreenState extends State<MainScreen> {
     });
   }
 
+  void _handlePageSwipeUpdate(DragUpdateDetails details) {
+    _pageSwipeDelta += details.primaryDelta ?? 0;
+  }
+
+  void _handlePageSwipeEnd(DragEndDetails details) {
+    final velocity = details.primaryVelocity ?? 0;
+    final travel = _pageSwipeDelta;
+    _pageSwipeDelta = 0;
+    if (velocity.abs() < 180 && travel.abs() < 72) return;
+
+    final swipeValue = velocity.abs() >= 180 ? velocity : travel;
+    final nextIndex = swipeValue < 0 ? _currentIndex + 1 : _currentIndex - 1;
+    if (nextIndex < 0 || nextIndex >= _pages.length) return;
+    _switchPage(nextIndex);
+  }
+
+  void _handlePageSwipeCancel() {
+    _pageSwipeDelta = 0;
+  }
+
+  Future<bool> _areNotificationsEnabled() async {
+    if (!Platform.isAndroid) return true;
+    try {
+      return await _notificationsChannel.invokeMethod<bool>(
+            'areNotificationsEnabled',
+          ) ??
+          true;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  Future<void> _openNotificationSettings() async {
+    if (!Platform.isAndroid) return;
+    try {
+      final opened =
+          await _notificationsChannel.invokeMethod<bool>(
+            'openNotificationSettings',
+          ) ??
+          false;
+      if (!opened && mounted) {
+        await openAppSettings();
+      }
+    } catch (_) {
+      if (mounted) {
+        await openAppSettings();
+      }
+    }
+  }
+
+  String _notificationPermissionTitle(AppLanguageProvider i18n) {
+    return i18n.tr('notification_permission_title');
+  }
+
+  String _notificationPermissionMessage(AppLanguageProvider i18n) {
+    return i18n.tr('notification_permission_message');
+  }
+
+  String _notificationPermissionEnabledMessage(AppLanguageProvider i18n) {
+    return i18n.tr('notification_permission_enabled');
+  }
+
+  String _openSettingsLabel(AppLanguageProvider i18n) {
+    return i18n.tr('go_settings');
+  }
+
+  String _laterLabel(AppLanguageProvider i18n) {
+    return i18n.tr('later');
+  }
+
+  void _showNotificationPermissionEnabledSnack() {
+    showAppSnackBar(
+      context,
+      _notificationPermissionEnabledMessage(
+        context.read<AppLanguageProvider>(),
+      ),
+      tone: AppFeedbackTone.success,
+      icon: Icons.notifications_active_rounded,
+    );
+  }
+
+  Future<void> _ensureNotificationPermission() async {
+    _notificationPermissionCheckQueued = false;
+    if (_notificationPermissionCheckDone || !Platform.isAndroid || !mounted) {
+      return;
+    }
+    _notificationPermissionCheckDone = true;
+    final provider = context.read<AudioProvider>();
+
+    var enabled = await _areNotificationsEnabled();
+    if (enabled) return;
+
+    var status = await Permission.notification.status;
+    if (status.isGranted) {
+      await _promptOpenNotificationSettings();
+      return;
+    }
+
+    if (status.isDenied) {
+      status = await Permission.notification.request();
+      if (!context.mounted) return;
+      enabled = await _areNotificationsEnabled();
+      if (!context.mounted) return;
+      if (status.isGranted && enabled) {
+        provider.refreshNotificationState();
+        _showNotificationPermissionEnabledSnack();
+        return;
+      }
+    }
+
+    await _promptOpenNotificationSettings();
+  }
+
+  Future<void> _promptOpenNotificationSettings() async {
+    if (!mounted || _notificationSettingsDialogVisible) return;
+    _notificationSettingsDialogVisible = true;
+    final i18n = context.read<AppLanguageProvider>();
+    final openSettings = await showConfirmActionDialog(
+      context: context,
+      title: _notificationPermissionTitle(i18n),
+      message: _notificationPermissionMessage(i18n),
+      cancelLabel: _laterLabel(i18n),
+      confirmLabel: _openSettingsLabel(i18n),
+      icon: Icons.notifications_active_rounded,
+    );
+    _notificationSettingsDialogVisible = false;
+    if (openSettings != true) return;
+    _notificationSettingsOpened = true;
+    await _openNotificationSettings();
+  }
+
+  Future<void> _handleNotificationSettingsReturn() async {
+    if (!mounted || !Platform.isAndroid) return;
+    final audioProvider = context.read<AudioProvider>();
+    final enabled = await _areNotificationsEnabled();
+    if (!mounted || !enabled) return;
+    audioProvider.refreshNotificationState();
+    _showNotificationPermissionEnabledSnack();
+  }
+
   Widget _buildAnimatedBody({required bool isDesktop}) {
     final cs = Theme.of(context).colorScheme;
     final radius = BorderRadius.circular(isDesktop ? 28 : 24);
@@ -75,6 +255,12 @@ class _MainScreenState extends State<MainScreen> {
         final isCurrent = index == _currentIndex;
         final isPrevious = index == _previousIndex;
         final shouldShow = isCurrent || isPrevious;
+        final slideOffset = Offset(
+          isCurrent
+              ? 0.024 * _transitionDirection
+              : (-0.03 * _transitionDirection),
+          isCurrent ? 0.008 : 0,
+        );
 
         return Offstage(
           offstage: !shouldShow,
@@ -86,47 +272,56 @@ class _MainScreenState extends State<MainScreen> {
                 opacity: isCurrent ? 1 : 0,
                 duration: _pageTransitionDuration,
                 curve: _pageTransitionCurve,
-                child: AnimatedSlide(
-                  offset: isCurrent ? Offset.zero : const Offset(-0.015, 0),
+                child: AnimatedScale(
+                  scale: isCurrent ? 1 : 0.972,
                   duration: _pageTransitionDuration,
                   curve: _pageTransitionCurve,
-                  child: Align(
-                    alignment: Alignment.topCenter,
-                    child: isDesktop
-                        ? ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 980),
-                            child: Padding(
-                              padding: const EdgeInsets.fromLTRB(
-                                24,
-                                22,
-                                24,
-                                22,
-                              ),
-                              child: DecoratedBox(
-                                decoration: BoxDecoration(
-                                  color: cs.surface.withValues(alpha: 0.9),
-                                  borderRadius: radius,
-                                  border: Border.all(
-                                    color: cs.outlineVariant.withValues(
-                                      alpha: 0.75,
+                  child: AnimatedSlide(
+                    offset: isCurrent ? Offset.zero : slideOffset,
+                    duration: _pageTransitionDuration,
+                    curve: _pageTransitionCurve,
+                    child: Align(
+                      alignment: Alignment.topCenter,
+                      child: isDesktop
+                          ? ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 980),
+                              child: Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  24,
+                                  22,
+                                  24,
+                                  22,
+                                ),
+                                child: DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    color: cs.surface.withValues(alpha: 0.9),
+                                    borderRadius: radius,
+                                    border: Border.all(
+                                      color: cs.outlineVariant.withValues(
+                                        alpha: 0.75,
+                                      ),
+                                    ),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: cs.shadow.withValues(
+                                          alpha: 0.08,
+                                        ),
+                                        blurRadius: 20,
+                                        offset: const Offset(0, 8),
+                                      ),
+                                    ],
+                                  ),
+                                  child: ClipRRect(
+                                    borderRadius: radius,
+                                    child: RepaintBoundary(
+                                      child: _pages[index],
                                     ),
                                   ),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: cs.shadow.withValues(alpha: 0.08),
-                                      blurRadius: 20,
-                                      offset: const Offset(0, 8),
-                                    ),
-                                  ],
-                                ),
-                                child: ClipRRect(
-                                  borderRadius: radius,
-                                  child: _pages[index],
                                 ),
                               ),
-                            ),
-                          )
-                        : _pages[index],
+                            )
+                          : RepaintBoundary(child: _pages[index]),
+                    ),
                   ),
                 ),
               ),
@@ -137,18 +332,28 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
-  void _openTimerSettingsPage(BuildContext context) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (pageContext) => Scaffold(
-          body: const TimerTab(showHeader: true),
-          floatingActionButton: _BottomRightCloseButton(
-            onPressed: () => Navigator.of(pageContext).maybePop(),
-          ),
-          floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
-        ),
-      ),
-    );
+  Future<void> _openTimerSettingsPage(
+    BuildContext context,
+    _TimerPresentation timerState,
+  ) {
+    final i18n = context.read<AppLanguageProvider>();
+    final mediaSize = MediaQuery.sizeOf(context);
+    final isDesktop = mediaSize.width >= _desktopBreakpoint;
+
+    return showGeneralDialog<void>(
+      context: context,
+      barrierLabel: i18n.tr('close'),
+      barrierDismissible: true,
+      barrierColor: Colors.transparent,
+      transitionDuration: const Duration(milliseconds: 240),
+      pageBuilder: (dialogContext, animation, secondaryAnimation) {
+        return _TimerOverlaySheet(
+          isDesktop: isDesktop,
+          animation: animation,
+          openDetail: timerState.duration != null,
+        );
+      },
+    ).then((_) {});
   }
 
   String _fmtDuration(Duration duration) {
@@ -161,55 +366,40 @@ class _MainScreenState extends State<MainScreen> {
     return '$m:$s';
   }
 
-  String _timerFabLabel(AudioProvider provider, AppLanguageProvider i18n) {
-    final configured = provider.timerDuration != null;
+  String _timerFabLabel(
+    _TimerPresentation timerState,
+    AppLanguageProvider i18n,
+  ) {
+    final configured = timerState.duration != null;
     if (!configured) return i18n.tr('timer');
 
-    final remaining = provider.timerRemaining ?? provider.timerDuration!;
-    if (provider.timerActive) {
+    final remaining = timerState.remaining ?? timerState.duration!;
+    if (timerState.active) {
       return _fmtDuration(remaining);
     }
     if (remaining <= Duration.zero) {
       return i18n.tr('done');
     }
-    if (provider.timerMode == TimerMode.trigger) {
+    if (timerState.mode == TimerMode.trigger) {
       return i18n.tr('timer_play_plus', {'time': _fmtDuration(remaining)});
     }
     return _fmtDuration(remaining);
   }
 
-  Widget? _buildFloatingActionButton(
-    BuildContext context,
-    AudioProvider audioProvider,
-    AppLanguageProvider i18n,
-  ) {
-    if (_currentIndex == 1) {
-      return Semantics(
-        button: true,
-        label: i18n.tr('open_timer_settings'),
-        child: _GlassFloatingButton(
-          icon: Icons.timer_rounded,
-          label: _timerFabLabel(audioProvider, i18n),
-          onPressed: () => _openTimerSettingsPage(context),
-        ),
-      );
-    }
-
-    return null;
-  }
-
   Widget _buildBottomBar(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     final i18n = context.watch<AppLanguageProvider>();
     final items = _destinations.asMap().entries.map((entry) {
       final index = entry.key;
       final item = entry.value;
       final selected = index == _currentIndex;
       final label = i18n.tr(item.labelKey);
+      final inactive = Theme.of(
+        context,
+      ).colorScheme.onSurfaceVariant.withValues(alpha: 0.6);
 
       return Expanded(
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 3),
+          padding: const EdgeInsets.symmetric(horizontal: 1),
           child: Semantics(
             button: true,
             selected: selected,
@@ -217,35 +407,33 @@ class _MainScreenState extends State<MainScreen> {
             child: Material(
               color: Colors.transparent,
               child: InkWell(
-                borderRadius: BorderRadius.circular(999),
+                borderRadius: BorderRadius.circular(16),
                 onTap: () => _switchPage(index),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 220),
-                  curve: Curves.easeOutCubic,
+                child: Padding(
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 6,
-                  ),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(999),
-                    color: selected
-                        ? cs.surface.withValues(alpha: 0.28)
-                        : Colors.transparent,
-                    border: Border.all(
-                      color: selected
-                          ? cs.outlineVariant.withValues(alpha: 0.45)
-                          : Colors.transparent,
-                    ),
+                    horizontal: 2,
+                    vertical: 5,
                   ),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(
-                        selected ? item.selectedIcon : item.icon,
-                        size: 28,
-                        color: selected ? cs.onSurface : cs.onSurfaceVariant,
+                      AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 200),
+                        transitionBuilder: (child, animation) => FadeTransition(
+                          opacity: animation,
+                          child: ScaleTransition(
+                            scale: animation,
+                            child: child,
+                          ),
+                        ),
+                        child: Icon(
+                          selected ? item.selectedIcon : item.icon,
+                          key: ValueKey<bool>(selected),
+                          size: 21,
+                          color: selected ? _appleMusicAccent : inactive,
+                        ),
                       ),
-                      const SizedBox(height: 2),
+                      const SizedBox(height: 1),
                       Text(
                         label,
                         maxLines: 1,
@@ -253,9 +441,10 @@ class _MainScreenState extends State<MainScreen> {
                         style: Theme.of(context).textTheme.labelSmall?.copyWith(
                           fontSize: 9,
                           fontWeight: selected
-                              ? FontWeight.w800
-                              : FontWeight.w700,
-                          color: selected ? cs.onSurface : cs.onSurfaceVariant,
+                              ? FontWeight.w700
+                              : FontWeight.w600,
+                          letterSpacing: 0.1,
+                          color: selected ? _appleMusicAccent : inactive,
                         ),
                       ),
                     ],
@@ -268,48 +457,63 @@ class _MainScreenState extends State<MainScreen> {
       );
     }).toList();
 
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(3, 0, 3, 0),
+      child: Row(children: items),
+    );
+  }
+
+  Widget _buildMobileBottomDock(
+    BuildContext context, {
+    required AppLanguageProvider i18n,
+    required _TimerPresentation timerState,
+    required List<PlaybackSession> overlaySessions,
+    required bool showTimerChip,
+  }) {
     return SafeArea(
       top: false,
-      minimum: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+      minimum: const EdgeInsets.fromLTRB(12, 0, 12, 8),
       child: Align(
         alignment: Alignment.bottomCenter,
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 420),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(999),
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(999),
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [
-                        cs.surface.withValues(alpha: 0.34),
-                        cs.surfaceContainerHighest.withValues(alpha: 0.16),
-                      ],
-                    ),
-                    border: Border.all(
-                      color: cs.outlineVariant.withValues(alpha: 0.34),
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: cs.shadow.withValues(alpha: 0.2),
-                        blurRadius: 34,
-                        offset: const Offset(0, 14),
-                      ),
-                    ],
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
-                    child: Row(children: items),
+          constraints: const BoxConstraints(maxWidth: 430),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (showTimerChip)
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: _DockTimerChip(
+                    label: _timerFabLabel(timerState, i18n),
+                    onTap: () => _openTimerSettingsPage(context, timerState),
                   ),
                 ),
+              if (showTimerChip)
+                SizedBox(height: overlaySessions.isNotEmpty ? 8 : 14),
+              if (overlaySessions.isNotEmpty)
+                ActiveSessionCarousel(
+                  sessions: overlaySessions,
+                  provider: context.read<AudioProvider>(),
+                  i18n: i18n,
+                  onOpenSession: (sessionId) {
+                    Navigator.of(
+                      context,
+                    ).push(buildSessionDetailRoute(sessionId: sessionId));
+                  },
+                ),
+              if (overlaySessions.isNotEmpty) const SizedBox(height: 6),
+              _FloatingGlassPanel(
+                radius: 24,
+                blurSigma: 30,
+                borderOpacity: 0.18,
+                padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
+                shadowOpacity: 0.14,
+                showTopHighlight: false,
+                primaryFillOpacity: 0.05,
+                secondaryFillOpacity: 0.015,
+                child: _buildBottomBar(context),
               ),
-            ),
+            ],
           ),
         ),
       ),
@@ -318,7 +522,7 @@ class _MainScreenState extends State<MainScreen> {
 
   Widget _buildDesktopNavigation(
     BuildContext context,
-    AudioProvider audioProvider,
+    _TimerPresentation timerState,
     AppLanguageProvider i18n,
   ) {
     final cs = Theme.of(context).colorScheme;
@@ -389,9 +593,9 @@ class _MainScreenState extends State<MainScreen> {
             padding: const EdgeInsets.fromLTRB(8, 8, 8, 2),
             child: _DesktopQuickAction(
               icon: Icons.timer_rounded,
-              title: _timerFabLabel(audioProvider, i18n),
+              title: _timerFabLabel(timerState, i18n),
               subtitle: i18n.tr('timer'),
-              onTap: () => _openTimerSettingsPage(context),
+              onTap: () => _openTimerSettingsPage(context, timerState),
             ),
           ),
         ],
@@ -399,53 +603,120 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
-  double _mobileTimerButtonBottom(BuildContext context) {
-    final safeBottom = MediaQuery.paddingOf(context).bottom;
-    return safeBottom + 90;
+  double _mobileContentInset({
+    required bool hasNowPlaying,
+    required bool hasTimerChip,
+  }) {
+    if (hasNowPlaying && hasTimerChip) return 248;
+    if (hasNowPlaying) return 196;
+    if (hasTimerChip) return 156;
+    return 112;
   }
 
   @override
   Widget build(BuildContext context) {
-    final audioProvider = context.watch<AudioProvider>();
     final i18n = context.watch<AppLanguageProvider>();
+    final brightness = Theme.of(context).brightness;
+    final overlayStyle = brightness == Brightness.dark
+        ? const SystemUiOverlayStyle(
+            statusBarColor: Colors.transparent,
+            systemNavigationBarColor: Colors.transparent,
+            systemNavigationBarDividerColor: Colors.transparent,
+            statusBarIconBrightness: Brightness.light,
+            statusBarBrightness: Brightness.dark,
+            systemNavigationBarIconBrightness: Brightness.light,
+            systemStatusBarContrastEnforced: false,
+            systemNavigationBarContrastEnforced: false,
+          )
+        : const SystemUiOverlayStyle(
+            statusBarColor: Colors.transparent,
+            systemNavigationBarColor: Colors.transparent,
+            systemNavigationBarDividerColor: Colors.transparent,
+            statusBarIconBrightness: Brightness.dark,
+            statusBarBrightness: Brightness.light,
+            systemNavigationBarIconBrightness: Brightness.dark,
+            systemStatusBarContrastEnforced: false,
+            systemNavigationBarContrastEnforced: false,
+          );
+    final overlaySessions = context
+        .select<AudioProvider, List<PlaybackSession>>(
+          (provider) => provider.multiThreadPlaybackEnabled
+              ? provider.activeSessions.toList(growable: false)
+              : provider.activeSessions
+                    .where((session) => session.state.playing)
+                    .toList(growable: false),
+        );
+    final activeSessionCount = context.select<AudioProvider, int>(
+      (provider) => provider.activeSessions.length,
+    );
+    final hasNowPlaying = overlaySessions.isNotEmpty;
+    if (activeSessionCount > 0 &&
+        !_notificationPermissionCheckDone &&
+        !_notificationPermissionCheckQueued) {
+      _notificationPermissionCheckQueued = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _ensureNotificationPermission();
+      });
+    }
+    final timerState = context.select<AudioProvider, _TimerPresentation>(
+      (provider) => _TimerPresentation(
+        duration: provider.timerDuration,
+        remaining: provider.timerRemaining,
+        active: provider.timerActive,
+        mode: provider.timerMode,
+      ),
+    );
     final width = MediaQuery.sizeOf(context).width;
     final isDesktop = width >= _desktopBreakpoint;
-    final mobileFab = isDesktop
-        ? null
-        : _buildFloatingActionButton(context, audioProvider, i18n);
+    final showTimerChip = !isDesktop && _currentIndex == 1;
+    final mobileContentInset = isDesktop
+        ? 0.0
+        : _mobileContentInset(
+            hasNowPlaying: hasNowPlaying,
+            hasTimerChip: showTimerChip,
+          );
 
-    return Scaffold(
-      extendBody: !isDesktop,
-      backgroundColor: Colors.transparent,
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          const _AmbientBackground(),
-          if (isDesktop)
-            Row(
-              children: [
-                _buildDesktopNavigation(context, audioProvider, i18n),
-                Expanded(child: _buildAnimatedBody(isDesktop: true)),
-              ],
-            )
-          else
-            Stack(
-              fit: StackFit.expand,
-              children: [
-                _buildAnimatedBody(isDesktop: false),
-                Align(
-                  alignment: Alignment.bottomCenter,
-                  child: _buildBottomBar(context),
-                ),
-                if (mobileFab != null)
-                  Positioned(
-                    right: 16,
-                    bottom: _mobileTimerButtonBottom(context),
-                    child: mobileFab,
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: overlayStyle,
+      child: Scaffold(
+        extendBody: !isDesktop,
+        backgroundColor: Colors.transparent,
+        body: Stack(
+          fit: StackFit.expand,
+          children: [
+            const _AmbientBackground(),
+            if (isDesktop)
+              Row(
+                children: [
+                  _buildDesktopNavigation(context, timerState, i18n),
+                  Expanded(child: _buildAnimatedBody(isDesktop: true)),
+                ],
+              )
+            else
+              Stack(
+                fit: StackFit.expand,
+                children: [
+                  MobileOverlayInset(
+                    bottomInset: mobileContentInset,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onHorizontalDragUpdate: _handlePageSwipeUpdate,
+                      onHorizontalDragEnd: _handlePageSwipeEnd,
+                      onHorizontalDragCancel: _handlePageSwipeCancel,
+                      child: _buildAnimatedBody(isDesktop: false),
+                    ),
                   ),
-              ],
-            ),
-        ],
+                  _buildMobileBottomDock(
+                    context,
+                    i18n: i18n,
+                    timerState: timerState,
+                    overlaySessions: overlaySessions,
+                    showTimerChip: showTimerChip,
+                  ),
+                ],
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -476,7 +747,7 @@ class _AmbientBackground extends StatelessWidget {
             left: -96,
             top: -64,
             child: _GlowOrb(
-              color: cs.primary.withValues(alpha: 0.12),
+              color: cs.primary.withValues(alpha: 0.16),
               size: 260,
             ),
           ),
@@ -484,7 +755,7 @@ class _AmbientBackground extends StatelessWidget {
             right: -72,
             bottom: -86,
             child: _GlowOrb(
-              color: cs.tertiary.withValues(alpha: 0.1),
+              color: cs.tertiary.withValues(alpha: 0.14),
               size: 232,
             ),
           ),
@@ -539,7 +810,10 @@ class _DesktopQuickAction extends StatelessWidget {
       borderRadius: BorderRadius.circular(16),
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
-        onTap: onTap,
+        onTap: () {
+          Feedback.forTap(context);
+          onTap();
+        },
         child: Padding(
           padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
           child: Row(
@@ -598,94 +872,256 @@ class _MainDestination {
   final String labelKey;
 }
 
-class _BottomRightCloseButton extends StatelessWidget {
-  const _BottomRightCloseButton({required this.onPressed});
+class _TimerPresentation {
+  const _TimerPresentation({
+    required this.duration,
+    required this.remaining,
+    required this.active,
+    required this.mode,
+  });
 
-  final VoidCallback onPressed;
+  final Duration? duration;
+  final Duration? remaining;
+  final bool active;
+  final TimerMode? mode;
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is _TimerPresentation &&
+        other.duration == duration &&
+        other.remaining == remaining &&
+        other.active == active &&
+        other.mode == mode;
+  }
+
+  @override
+  int get hashCode => Object.hash(duration, remaining, active, mode);
+}
+
+class _FloatingGlassPanel extends StatelessWidget {
+  const _FloatingGlassPanel({
+    required this.child,
+    this.radius = 24,
+    this.blurSigma = 26,
+    this.padding = EdgeInsets.zero,
+    this.borderOpacity = 0.42,
+    this.shadowOpacity = 0.22,
+    this.showTopHighlight = true,
+    this.primaryFillOpacity = 0.22,
+    this.secondaryFillOpacity = 0.10,
+  });
+
+  final Widget child;
+  final double radius;
+  final double blurSigma;
+  final EdgeInsetsGeometry padding;
+  final double borderOpacity;
+  final double shadowOpacity;
+  final bool showTopHighlight;
+  final double primaryFillOpacity;
+  final double secondaryFillOpacity;
 
   @override
   Widget build(BuildContext context) {
-    final i18n = context.watch<AppLanguageProvider>();
-    return Semantics(
-      button: true,
-      label: i18n.tr('close'),
-      child: FloatingActionButton.small(
-        heroTag: null,
-        onPressed: onPressed,
-        child: const Icon(Icons.close_rounded),
+    final cs = Theme.of(context).colorScheme;
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(radius),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: blurSigma, sigmaY: blurSigma),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(radius),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                cs.surface.withValues(alpha: primaryFillOpacity),
+                cs.surfaceContainerHighest.withValues(
+                  alpha: secondaryFillOpacity,
+                ),
+              ],
+            ),
+            border: Border.all(
+              color: cs.outlineVariant.withValues(alpha: borderOpacity),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: cs.shadow.withValues(alpha: shadowOpacity),
+                blurRadius: 36,
+                offset: const Offset(0, 16),
+              ),
+            ],
+          ),
+          child: Stack(
+            children: [
+              if (showTopHighlight)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            Colors.white.withValues(alpha: 0.07),
+                            Colors.white.withValues(alpha: 0),
+                          ],
+                          stops: const [0, 0.26],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              Padding(padding: padding, child: child),
+            ],
+          ),
+        ),
       ),
     );
   }
 }
 
-class _GlassFloatingButton extends StatelessWidget {
-  const _GlassFloatingButton({
-    required this.icon,
-    required this.label,
-    required this.onPressed,
-  });
+class _DockTimerChip extends StatelessWidget {
+  const _DockTimerChip({required this.label, required this.onTap});
 
-  final IconData icon;
   final String label;
-  final VoidCallback onPressed;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(18),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(18),
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                cs.surface.withValues(alpha: 0.46),
-                cs.surfaceContainerHighest.withValues(alpha: 0.22),
+
+    return _FloatingGlassPanel(
+      radius: 20,
+      blurSigma: 24,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(20),
+          onTap: () {
+            Feedback.forTap(context);
+            HapticFeedback.selectionClick();
+            onTap();
+          },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.timer_rounded, size: 18, color: cs.onSurface),
+                const SizedBox(width: 8),
+                Text(
+                  label,
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    color: cs.onSurface,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
               ],
-            ),
-            border: Border.all(
-              color: cs.outlineVariant.withValues(alpha: 0.42),
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: cs.shadow.withValues(alpha: 0.2),
-                blurRadius: 24,
-                offset: const Offset(0, 10),
-              ),
-            ],
-          ),
-          child: Material(
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: onPressed,
-              borderRadius: BorderRadius.circular(18),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 10,
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(icon, size: 20, color: cs.onSurface),
-                    const SizedBox(width: 8),
-                    Text(
-                      label,
-                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                        color: cs.onSurface,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _TimerOverlaySheet extends StatelessWidget {
+  const _TimerOverlaySheet({
+    required this.isDesktop,
+    required this.animation,
+    required this.openDetail,
+  });
+
+  final bool isDesktop;
+  final Animation<double> animation;
+  final bool openDetail;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final maxWidth = isDesktop ? 472.0 : 404.0;
+    final outerPadding = EdgeInsets.fromLTRB(
+      isDesktop ? 28 : 16,
+      isDesktop ? 28 : 176,
+      isDesktop ? 28 : 16,
+      isDesktop ? 28 : 132,
+    );
+    final curved = CurvedAnimation(
+      parent: animation,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
+    );
+
+    return Material(
+      color: Colors.transparent,
+      child: AnimatedBuilder(
+        animation: curved,
+        builder: (context, child) {
+          final progress = curved.value.clamp(0.0, 1.0);
+
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              Positioned.fill(
+                child: GestureDetector(
+                  onTap: () => Navigator.of(context).maybePop(),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: cs.scrim.withValues(
+                            alpha: 0.08 + (0.14 * progress),
+                          ),
+                        ),
+                      ),
+                      Opacity(
+                        opacity: progress,
+                        child: ClipRect(
+                          child: BackdropFilter(
+                            filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+                            child: const SizedBox.expand(),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              SafeArea(
+                child: FadeTransition(
+                  opacity: curved,
+                  child: SlideTransition(
+                    position: Tween<Offset>(
+                      begin: const Offset(0, 0.035),
+                      end: Offset.zero,
+                    ).animate(curved),
+                    child: Padding(
+                      padding: outerPadding,
+                      child: Align(
+                        alignment: isDesktop
+                            ? Alignment.center
+                            : Alignment.topCenter,
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(maxWidth: maxWidth),
+                          child: TimerTab(
+                            showHeader: false,
+                            useSafeArea: false,
+                            compactOnly: true,
+                            initialCompactDetail: openDetail,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }

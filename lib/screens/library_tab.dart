@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:io';
+import 'dart:math';
 
-import 'package:auto_size_text/auto_size_text.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -13,8 +13,11 @@ import 'package:provider/provider.dart';
 
 import '../i18n/app_language_provider.dart';
 import '../providers/audio_provider.dart';
-import 'video_converter_tab.dart';
+import '../widgets/app_feedback.dart';
+import '../widgets/confirm_action_dialog.dart';
+import '../widgets/mobile_overlay_inset.dart';
 import '../widgets/top_page_header.dart';
+import 'video_converter_tab.dart';
 
 class LibraryTab extends StatefulWidget {
   const LibraryTab({super.key});
@@ -76,7 +79,7 @@ class _LibraryTabState extends State<LibraryTab> {
               )
               .toList();
           final before = provider.library.length;
-          provider.addTracks(toAdd);
+          provider.addTracks(toAdd, notify: false);
           totalAdded += provider.library.length - before;
         } else {
           totalAdded += await _importFolderIncrementally(folderPath, provider);
@@ -113,10 +116,10 @@ class _LibraryTabState extends State<LibraryTab> {
 
   Future<void> _addFolderFromPath(String folderPath) async {
     final i18n = context.read<AppLanguageProvider>();
-    if (!mounted) return;
-    context.read<AudioProvider>().setScanning(true);
-
     final provider = context.read<AudioProvider>();
+    if (!mounted) return;
+    provider.setScanning(true);
+
     var added = 0;
 
     try {
@@ -137,15 +140,15 @@ class _LibraryTabState extends State<LibraryTab> {
             .toList();
 
         final beforeCount = provider.library.length;
-        provider.addTracks(toAdd);
+        provider.addTracks(toAdd, notify: false);
         added = provider.library.length - beforeCount;
       } else {
         added = await _importFolderIncrementally(folderPath, provider);
       }
     } finally {
       if (mounted) {
+        provider.addWatchedFolder(folderPath, notify: false);
         provider.setScanning(false);
-        provider.addWatchedFolder(folderPath);
         _showSnack(i18n.tr('import_done_added', {'count': added}));
       }
     }
@@ -208,7 +211,7 @@ class _LibraryTabState extends State<LibraryTab> {
       if (mounted) {
         final provider = context.read<AudioProvider>();
         final beforeCount = provider.library.length;
-        provider.addTracks(candidates);
+        provider.addTracks(candidates, notify: false);
         final added = provider.library.length - beforeCount;
         _showSnack(i18n.tr('import_done_added', {'count': added}));
       }
@@ -362,13 +365,13 @@ class _LibraryTabState extends State<LibraryTab> {
         added++;
 
         if (batch.length >= batchSize) {
-          provider.addTracks(batch);
+          provider.addTracks(batch, notify: false);
           batch.clear();
           await Future<void>.delayed(Duration.zero);
         }
       }
     }
-    provider.addTracks(batch);
+    provider.addTracks(batch, notify: false);
     return added;
   }
 
@@ -404,11 +407,13 @@ class _LibraryTabState extends State<LibraryTab> {
     final i18n = context.watch<AppLanguageProvider>();
     final provider = context.watch<AudioProvider>();
     final tree = provider.buildLibraryTree();
-    final cs = Theme.of(context).colorScheme;
-    final leafFolderCount = tree.whereType<FolderNode>().fold<int>(
-      0,
-      (count, folder) => count + folder.leafFolderCount,
+    final leafFolderCount = context.select<AudioProvider, int>(
+      (value) => value.libraryLeafFolderCount,
     );
+    final bottomInset = max(132.0, MobileOverlayInset.of(context));
+    final _ =
+        '${i18n.tr('audio_count', {'count': provider.library.length})} 路 '
+        '${i18n.tr('folder_count', {'count': leafFolderCount})}';
 
     return SafeArea(
       child: Column(
@@ -416,6 +421,10 @@ class _LibraryTabState extends State<LibraryTab> {
           TopPageHeader(
             icon: Icons.library_music_rounded,
             title: i18n.tr('music_library'),
+            subtitle: i18n.tr(
+              'audio_count',
+              {'count': provider.library.length},
+            ),
             trailing: SizedBox(
               width: 112,
               height: 44,
@@ -498,33 +507,18 @@ class _LibraryTabState extends State<LibraryTab> {
             bottomSpacing: 10,
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
           ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 6,
-              children: [
-                _MetricChip(
-                  icon: Icons.music_note_rounded,
-                  text: i18n.tr('audio_count', {
-                    'count': provider.library.length,
-                  }),
-                ),
-                _MetricChip(
-                  icon: Icons.folder_rounded,
-                  text: i18n.tr('folder_count', {'count': leafFolderCount}),
-                ),
-              ],
-            ),
-          ),
           Expanded(
             child: tree.isEmpty
                 ? _LibraryEmptyState(
                     onImportFolder: _addFolder,
                     onImportFile: _addFiles,
+                    bottomInset: bottomInset,
                   )
                 : ListView.builder(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 132),
+                    padding: EdgeInsets.fromLTRB(16, 4, 16, bottomInset),
+                    cacheExtent: 720,
+                    keyboardDismissBehavior:
+                        ScrollViewKeyboardDismissBehavior.onDrag,
                     itemCount: tree.length,
                     itemBuilder: (context, index) {
                       final node = tree[index];
@@ -535,54 +529,31 @@ class _LibraryTabState extends State<LibraryTab> {
                     },
                   ),
           ),
-          Divider(height: 1, color: cs.outlineVariant.withValues(alpha: 0.7)),
         ],
       ),
     );
   }
 }
 
-class _MetricChip extends StatelessWidget {
-  const _MetricChip({required this.icon, required this.text});
-
-  final IconData icon;
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: cs.surfaceContainerHighest.withValues(alpha: 0.55),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: cs.outlineVariant),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 14, color: cs.onSurfaceVariant),
-          const SizedBox(width: 6),
-          Text(
-            text,
-            style: Theme.of(
-              context,
-            ).textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w700),
-          ),
-        ],
-      ),
-    );
-  }
+void _showSessionCreatedSnack(BuildContext context, String message) {
+  showAppSnackBar(
+    context,
+    message,
+    tone: AppFeedbackTone.success,
+    icon: Icons.queue_music_rounded,
+  );
 }
 
 class _LibraryEmptyState extends StatelessWidget {
   const _LibraryEmptyState({
     required this.onImportFolder,
     required this.onImportFile,
+    required this.bottomInset,
   });
 
   final VoidCallback onImportFolder;
   final VoidCallback onImportFile;
+  final double bottomInset;
 
   @override
   Widget build(BuildContext context) {
@@ -590,7 +561,7 @@ class _LibraryEmptyState extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     return Center(
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 24),
+        padding: EdgeInsets.fromLTRB(24, 0, 24, bottomInset),
         child: Card(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(18, 20, 18, 18),
@@ -668,137 +639,179 @@ class _LibraryTreeItem extends StatelessWidget {
   }
 }
 
-class _FolderNodeWidget extends StatelessWidget {
+class _FolderNodeWidget extends StatefulWidget {
   const _FolderNodeWidget({required this.folder});
 
   final FolderNode folder;
+
+  @override
+  State<_FolderNodeWidget> createState() => _FolderNodeWidgetState();
+}
+
+class _FolderNodeWidgetState extends State<_FolderNodeWidget> {
+  final ExpansibleController _expansionController = ExpansibleController();
+  bool _expanded = false;
 
   Future<void> _confirmRemoveFolder(
     BuildContext context,
     AudioProvider provider,
   ) async {
     final i18n = context.read<AppLanguageProvider>();
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showConfirmActionDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(i18n.tr('remove_folder')),
-        content: Text(i18n.tr('remove_folder_confirm', {'name': folder.name})),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: Text(i18n.tr('cancel')),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            style: FilledButton.styleFrom(
-              backgroundColor: Theme.of(ctx).colorScheme.error,
-              foregroundColor: Theme.of(ctx).colorScheme.onError,
-            ),
-            child: Text(i18n.tr('remove')),
-          ),
-        ],
+      title: i18n.tr('remove_folder'),
+      message: i18n.tr(
+        'remove_folder_confirm',
+        {'name': widget.folder.name},
       ),
+      cancelLabel: i18n.tr('cancel'),
+      confirmLabel: i18n.tr('remove'),
+      icon: Icons.delete_outline_rounded,
     );
     if (confirmed == true && context.mounted) {
-      provider.removeFolderFromLibrary(folder.path);
-      ScaffoldMessenger.of(context)
-        ..clearSnackBars()
-        ..showSnackBar(
-          SnackBar(
-            content: Text(i18n.tr('removed_prefix', {'name': folder.name})),
-          ),
-        );
+      await provider.removeFolderFromLibrary(widget.folder.path);
     }
   }
 
   void _playFolder(BuildContext context, AudioProvider provider) {
     final i18n = context.read<AppLanguageProvider>();
-    final tracks = folder.allTracks;
-    if (tracks.isEmpty) return;
-    provider.spawnSession(tracks.first);
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(
-            i18n.tr('session_created', {'name': tracks.first.displayName}),
-          ),
-        ),
-      );
+    final firstTrack = widget.folder.firstTrack;
+    if (firstTrack == null) return;
+    Feedback.forTap(context);
+    unawaited(provider.spawnSession(firstTrack));
+    _showSessionCreatedSnack(
+      context,
+      i18n.tr('session_created', {'name': firstTrack.displayName}),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final i18n = context.watch<AppLanguageProvider>();
-    final provider = context.watch<AudioProvider>();
+    final provider = context.read<AudioProvider>();
     final cs = Theme.of(context).colorScheme;
-    final radius = BorderRadius.circular(16);
+    final isRootFolder = widget.folder.depth == 0;
+    final cardShape = RoundedRectangleBorder(
+      side: BorderSide(color: cs.outlineVariant),
+      borderRadius: BorderRadius.circular(14),
+    );
+    final groupLabel = isRootFolder
+        ? ''
+        : path.basename(path.dirname(widget.folder.path));
 
-    return Card(
-      margin: const EdgeInsets.only(bottom: 10),
-      clipBehavior: Clip.antiAlias,
-      shape: RoundedRectangleBorder(
-        side: BorderSide(color: cs.outlineVariant),
-        borderRadius: radius,
-      ),
-      child: ExpansionTile(
-        shape: RoundedRectangleBorder(borderRadius: radius),
-        collapsedShape: RoundedRectangleBorder(borderRadius: radius),
-        tilePadding: const EdgeInsets.fromLTRB(12, 4, 8, 4),
-        childrenPadding: const EdgeInsets.only(left: 10, right: 10, bottom: 8),
-        leading: Container(
-          width: 36,
-          height: 36,
-          decoration: BoxDecoration(
-            color: cs.primaryContainer,
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Icon(
-            Icons.folder_rounded,
-            color: cs.onPrimaryContainer,
-            size: 20,
-          ),
-        ),
-        title: _AdaptiveNameText(folder.name),
-        subtitle: Text(
-          i18n.tr('items_count', {'count': folder.children.length}),
-          style: Theme.of(
-            context,
-          ).textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant),
-        ),
-        trailing: SizedBox(
-          width: 100,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              IconButton.filledTonal(
-                icon: const Icon(Icons.play_arrow_rounded, size: 20),
-                tooltip: i18n.tr('play_first'),
-                visualDensity: VisualDensity.compact,
-                onPressed: () => _playFolder(context, provider),
-              ),
-              const SizedBox(width: 4),
-              IconButton(
-                icon: Icon(
-                  Icons.delete_outline_rounded,
-                  size: 20,
-                  color: cs.error,
+    return _SwipeRevealCard(
+      margin: const EdgeInsets.only(bottom: 6),
+      shape: cardShape,
+      actionLabel: i18n.tr('remove'),
+      removeTooltip: i18n.tr('remove_audio_folder'),
+      onRemove: () => _confirmRemoveFolder(context, provider),
+      onWillReveal: _expansionController.collapse,
+      child: Card(
+        margin: EdgeInsets.zero,
+        clipBehavior: Clip.antiAlias,
+        shape: cardShape,
+        color: cs.surface,
+        child: Theme(
+          data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+          child: ExpansionTile(
+            controller: _expansionController,
+            onExpansionChanged: (expanded) {
+              if (_expanded == expanded) return;
+              setState(() {
+                _expanded = expanded;
+              });
+            },
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
+            collapsedShape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
+            tilePadding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
+            childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+            leading: isRootFolder
+                ? _LibraryCoverThumbnail(
+                    coverPathFuture: provider.coverPathFutureForFolder(
+                      widget.folder.path,
+                    ),
+                    title: widget.folder.name,
+                  )
+                : null,
+            title: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (groupLabel.isNotEmpty)
+                  Text(
+                    groupLabel,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: cs.onSurfaceVariant.withValues(alpha: 0.65),
+                      fontWeight: FontWeight.w500,
+                      fontSize: 10,
+                    ),
+                  ),
+                if (groupLabel.isNotEmpty) const SizedBox(height: 3),
+                Text(
+                  widget.folder.name,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w900,
+                    fontSize: 14,
+                    height: 1.06,
+                  ),
                 ),
-                tooltip: i18n.tr('remove_audio_folder'),
-                visualDensity: VisualDensity.compact,
-                onPressed: () => _confirmRemoveFolder(context, provider),
+                const SizedBox(height: 6),
+                SizedBox(
+                  width: double.infinity,
+                  child: _LibraryMetaChip(
+                    icon: Icons.library_music_rounded,
+                    text: i18n.tr('audio_count', {
+                      'count': widget.folder.totalTrackCount,
+                    }),
+                  ),
+                ),
+              ],
+            ),
+            trailing: SizedBox(
+              width: 78,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  IconButton.filledTonal(
+                    onPressed: () => _playFolder(context, provider),
+                    visualDensity: VisualDensity.compact,
+                    icon: const Icon(Icons.play_arrow_rounded, size: 20),
+                  ),
+                  const SizedBox(width: 4),
+                  IgnorePointer(
+                    child: AnimatedRotation(
+                      turns: _expanded ? 0.5 : 0,
+                      duration: const Duration(milliseconds: 180),
+                      curve: Curves.easeOutCubic,
+                      child: Icon(
+                        Icons.expand_more_rounded,
+                        color: cs.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ],
               ),
-            ],
+            ),
+            children: widget.folder.children
+                .map(
+                  (childNode) => Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: _LibraryTreeItem(
+                      key: ValueKey(childNode.path),
+                      node: childNode,
+                    ),
+                  ),
+                )
+                .toList(),
           ),
         ),
-        children: folder.children
-            .map(
-              (childNode) => _LibraryTreeItem(
-                key: ValueKey(childNode.path),
-                node: childNode,
-              ),
-            )
-            .toList(),
       ),
     );
   }
@@ -809,69 +822,426 @@ class _TrackNodeWidget extends StatelessWidget {
 
   final TrackNode trackNode;
 
+  Future<void> _confirmRemoveTrack(
+    BuildContext context,
+    AudioProvider provider,
+    MusicTrack track,
+  ) async {
+    final i18n = context.read<AppLanguageProvider>();
+    final confirmed = await showConfirmActionDialog(
+      context: context,
+      title: i18n.tr('remove_audio'),
+      message: track.displayName,
+      cancelLabel: i18n.tr('cancel'),
+      confirmLabel: i18n.tr('remove'),
+      icon: Icons.delete_outline_rounded,
+    );
+    if (confirmed == true && context.mounted) {
+      await provider.removeTrackFromLibrary(track.path);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final i18n = context.watch<AppLanguageProvider>();
-    final provider = context.watch<AudioProvider>();
+    final provider = context.read<AudioProvider>();
     final cs = Theme.of(context).colorScheme;
     final track = trackNode.track;
-    final isAlreadyPlaying = provider.activeSessions.any(
-      (s) => s.currentTrackPath == track.path,
+    final isAlreadyPlaying = context.select<AudioProvider, bool>(
+      (value) => value.isTrackActive(track.path),
+    );
+    final folderName = track.isSingle ? i18n.tr('imported_files') : track.groupTitle;
+    final cardShape = RoundedRectangleBorder(
+      side: BorderSide(
+        color: isAlreadyPlaying
+            ? cs.primary.withValues(alpha: 0.48)
+            : cs.outlineVariant,
+      ),
+      borderRadius: BorderRadius.circular(14),
     );
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      decoration: BoxDecoration(
-        color: cs.surfaceContainerHighest.withValues(alpha: 0.45),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 10),
-        minVerticalPadding: 10,
-        leading: Icon(
-          isAlreadyPlaying ? Icons.volume_up_rounded : Icons.music_note_rounded,
-          color: isAlreadyPlaying ? cs.primary : cs.onSurfaceVariant,
-        ),
-        title: _AdaptiveNameText(track.displayName, maxLines: 3),
-        trailing: SizedBox(
-          width: 82,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              IconButton(
-                icon: Icon(
-                  isAlreadyPlaying
-                      ? Icons.add_circle_outline_rounded
-                      : Icons.play_arrow_rounded,
-                ),
-                tooltip: isAlreadyPlaying
-                    ? i18n.tr('create_another_session')
-                    : i18n.tr('play'),
-                onPressed: () {
-                  provider.spawnSession(track);
-                  ScaffoldMessenger.of(context)
-                    ..clearSnackBars()
-                    ..showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          i18n.tr('session_created', {
-                            'name': track.displayName,
-                          }),
+    return _SwipeRevealCard(
+      margin: const EdgeInsets.only(bottom: 6),
+      shape: cardShape,
+      actionLabel: i18n.tr('remove'),
+      removeTooltip: i18n.tr('remove_audio'),
+      onRemove: () => _confirmRemoveTrack(context, provider, track),
+      child: Card(
+        margin: EdgeInsets.zero,
+        clipBehavior: Clip.antiAlias,
+        shape: cardShape,
+        color: cs.surface,
+        child: SizedBox(
+          height: 88,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 10, 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        folderName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: cs.onSurfaceVariant.withValues(alpha: 0.65),
+                          fontWeight: FontWeight.w500,
+                          fontSize: 10,
                         ),
                       ),
+                      const SizedBox(height: 3),
+                      Text(
+                        track.displayName,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w900,
+                          fontSize: 14,
+                          height: 1.06,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                IconButton.filledTonal(
+                  onPressed: () {
+                    Feedback.forTap(context);
+                    unawaited(provider.spawnSession(track));
+                    _showSessionCreatedSnack(
+                      context,
+                      i18n.tr('session_created', {'name': track.displayName}),
                     );
-                },
+                  },
+                  icon: Icon(
+                    isAlreadyPlaying
+                        ? Icons.add_circle_outline_rounded
+                        : Icons.play_arrow_rounded,
+                    size: 20,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SwipeRevealCard extends StatefulWidget {
+  const _SwipeRevealCard({
+    required this.child,
+    required this.onRemove,
+    required this.actionLabel,
+    required this.removeTooltip,
+    required this.shape,
+    this.margin = EdgeInsets.zero,
+    this.onWillReveal,
+  });
+
+  final Widget child;
+  final VoidCallback onRemove;
+  final String actionLabel;
+  final String removeTooltip;
+  final ShapeBorder shape;
+  final EdgeInsets margin;
+  final VoidCallback? onWillReveal;
+
+  @override
+  State<_SwipeRevealCard> createState() => _SwipeRevealCardState();
+}
+
+class _SwipeRevealCardState extends State<_SwipeRevealCard> {
+  static const double _actionWidth = 128;
+
+  double _revealedWidth = 0;
+
+  bool get _isOpen => _revealedWidth > (_actionWidth * 0.5);
+
+  void _closePane() {
+    if (_revealedWidth == 0) return;
+    setState(() {
+      _revealedWidth = 0;
+    });
+  }
+
+  void _handleHorizontalDragUpdate(DragUpdateDetails details) {
+    final nextWidth = (_revealedWidth - details.delta.dx).clamp(
+      0.0,
+      _actionWidth,
+    );
+    if (nextWidth == _revealedWidth) return;
+    if (_revealedWidth == 0 && nextWidth > 0) {
+      HapticFeedback.selectionClick();
+      widget.onWillReveal?.call();
+    }
+    setState(() {
+      _revealedWidth = nextWidth;
+    });
+  }
+
+  void _handleHorizontalDragEnd(DragEndDetails details) {
+    final velocity = details.primaryVelocity ?? 0;
+    final shouldOpen =
+        velocity < -180 || (velocity.abs() < 180 && _revealedWidth > 44);
+    setState(() {
+      _revealedWidth = shouldOpen ? _actionWidth : 0;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final i18n = context.watch<AppLanguageProvider>();
+    final cs = Theme.of(context).colorScheme;
+    final revealProgress = (_revealedWidth / _actionWidth).clamp(0.0, 1.0);
+
+    return TapRegion(
+      onTapOutside: (_) => _closePane(),
+      child: Padding(
+        padding: widget.margin,
+        child: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onHorizontalDragUpdate: _handleHorizontalDragUpdate,
+          onHorizontalDragEnd: _handleHorizontalDragEnd,
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: DecoratedBox(
+                  decoration: ShapeDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        cs.errorContainer.withValues(alpha: 0.94),
+                        cs.errorContainer.withValues(alpha: 0.82),
+                      ],
+                    ),
+                    shape: widget.shape,
+                  ),
+                  child: Stack(
+                    children: [
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Padding(
+                          padding: const EdgeInsets.only(left: 18, right: 86),
+                          child: AnimatedOpacity(
+                            opacity: 0.24 + (revealProgress * 0.76),
+                            duration: const Duration(milliseconds: 160),
+                            curve: Curves.easeOutCubic,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 5,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: cs.error.withValues(alpha: 0.12),
+                                    borderRadius: BorderRadius.circular(999),
+                                    border: Border.all(
+                                      color: cs.error.withValues(alpha: 0.18),
+                                    ),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        Icons.swipe_left_rounded,
+                                        size: 14,
+                                        color: cs.error,
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        widget.actionLabel,
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .labelMedium
+                                            ?.copyWith(
+                                              color: cs.error,
+                                              fontWeight: FontWeight.w800,
+                                            ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  widget.removeTooltip,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(context).textTheme.bodySmall
+                                      ?.copyWith(
+                                        color: cs.onErrorContainer,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: Padding(
+                          padding: const EdgeInsets.only(right: 14),
+                          child: AnimatedScale(
+                            scale: 0.92 + (revealProgress * 0.08),
+                            duration: const Duration(milliseconds: 180),
+                            curve: Curves.easeOutBack,
+                            child: IconButton.filled(
+                              onPressed: () {
+                                Feedback.forTap(context);
+                                HapticFeedback.mediumImpact();
+                                _closePane();
+                                widget.onRemove();
+                              },
+                              style: IconButton.styleFrom(
+                                backgroundColor: cs.error,
+                                foregroundColor: cs.onError,
+                                minimumSize: const Size(54, 54),
+                                maximumSize: const Size(54, 54),
+                              ),
+                              tooltip: i18n.tr('remove'),
+                              icon: const Icon(Icons.delete_outline_rounded),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
-              IconButton(
-                icon: const Icon(Icons.delete_outline_rounded, size: 20),
-                tooltip: i18n.tr('remove_audio'),
-                onPressed: () {
-                  provider.removeTrackFromLibrary(track.path);
+              TweenAnimationBuilder<double>(
+                tween: Tween<double>(begin: 0, end: _revealedWidth),
+                duration: const Duration(milliseconds: 220),
+                curve: Curves.easeOutCubic,
+                builder: (context, value, child) {
+                  return Transform.translate(
+                    offset: Offset(-value, 0),
+                    child: child,
+                  );
                 },
+                child: IgnorePointer(ignoring: _isOpen, child: widget.child),
               ),
+              if (_isOpen)
+                Positioned.fill(
+                  right: _actionWidth,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.translucent,
+                    onTap: _closePane,
+                  ),
+                ),
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _LibraryCoverThumbnail extends StatelessWidget {
+  const _LibraryCoverThumbnail({
+    required this.coverPathFuture,
+    required this.title,
+  });
+
+  final Future<String?> coverPathFuture;
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
+    Widget fallback() {
+      return DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              cs.primaryContainer,
+              cs.secondaryContainer.withValues(alpha: 0.92),
+            ],
+          ),
+        ),
+        child: Center(
+          child: Icon(
+            Icons.photo_album_rounded,
+            size: 28,
+            color: cs.onPrimaryContainer,
+          ),
+        ),
+      );
+    }
+
+    return SizedBox(
+      width: 78,
+      height: 78,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: FutureBuilder<String?>(
+          future: coverPathFuture,
+          builder: (context, snapshot) {
+            final coverPath = snapshot.data;
+            if (coverPath == null || coverPath.isEmpty) {
+              return fallback();
+            }
+            return Image.file(
+              File(coverPath),
+              fit: BoxFit.cover,
+              errorBuilder: (_, _, _) => fallback(),
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _LibraryMetaChip extends StatelessWidget {
+  const _LibraryMetaChip({required this.icon, required this.text});
+
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.7)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.max,
+        children: [
+          Icon(
+            icon,
+            size: 12,
+            color: cs.onSurfaceVariant.withValues(alpha: 0.65),
+          ),
+          const SizedBox(width: 5),
+          Flexible(
+            child: Text(
+              text,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                fontWeight: FontWeight.w600,
+                color: cs.onSurfaceVariant.withValues(alpha: 0.65),
+                fontSize: 9,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -893,28 +1263,4 @@ class _ScannedTrack {
   final String groupSubtitle;
   final bool isSingle;
   final String? displayName;
-}
-
-class _AdaptiveNameText extends StatelessWidget {
-  const _AdaptiveNameText(this.text, {this.maxLines = 3});
-
-  final String text;
-  final int maxLines;
-
-  @override
-  Widget build(BuildContext context) {
-    final style = Theme.of(
-      context,
-    ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800, height: 1.16);
-
-    return AutoSizeText(
-      text,
-      maxLines: maxLines,
-      minFontSize: 11,
-      stepGranularity: 0.5,
-      softWrap: true,
-      overflow: TextOverflow.ellipsis,
-      style: style,
-    );
-  }
 }

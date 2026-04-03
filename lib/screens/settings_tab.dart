@@ -1,16 +1,23 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path/path.dart' as path;
 import 'package:provider/provider.dart';
 
 import '../i18n/app_language_provider.dart';
 import '../providers/audio_provider.dart';
 import '../theme/theme_provider.dart';
+import '../widgets/app_feedback.dart';
+import '../widgets/mobile_overlay_inset.dart';
 import '../widgets/top_page_header.dart';
 
 class SettingsTab extends StatelessWidget {
   const SettingsTab({super.key});
+
+  static const MethodChannel _powerChannel = MethodChannel(
+    'music_player/power',
+  );
 
   Future<void> _clearTempCache(BuildContext context) async {
     final i18n = context.read<AppLanguageProvider>();
@@ -20,20 +27,43 @@ class SettingsTab extends StatelessWidget {
     if (await cacheDir.exists()) {
       await cacheDir.delete(recursive: true);
       if (context.mounted) {
-        ScaffoldMessenger.of(context)
-          ..clearSnackBars()
-          ..showSnackBar(
-            SnackBar(content: Text(i18n.tr('temp_cache_cleaned'))),
-          );
+        showAppSnackBar(
+          context,
+          i18n.tr('temp_cache_cleaned'),
+          tone: AppFeedbackTone.success,
+          icon: Icons.cleaning_services_rounded,
+        );
       }
       return;
     }
 
     if (context.mounted) {
-      ScaffoldMessenger.of(context)
-        ..clearSnackBars()
-        ..showSnackBar(SnackBar(content: Text(i18n.tr('temp_cache_none'))));
+      showAppSnackBar(
+        context,
+        i18n.tr('temp_cache_none'),
+        tone: AppFeedbackTone.info,
+        icon: Icons.info_outline_rounded,
+      );
     }
+  }
+
+  Future<bool> _isIgnoringBatteryOptimizations() async {
+    if (!Platform.isAndroid) return true;
+    try {
+      return await _powerChannel.invokeMethod<bool>(
+            'isIgnoringBatteryOptimizations',
+          ) ??
+          false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _openBatteryOptimizationSettings(BuildContext context) async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _powerChannel.invokeMethod<bool>('openBatteryOptimizationSettings');
+    } catch (_) {}
   }
 
   @override
@@ -41,19 +71,17 @@ class SettingsTab extends StatelessWidget {
     final i18n = context.watch<AppLanguageProvider>();
     final themeProvider = context.watch<ThemeProvider>();
     final audioProvider = context.watch<AudioProvider>();
+    final bottomInset = MobileOverlayInset.of(context);
     final cs = Theme.of(context).colorScheme;
     final descStyle = Theme.of(context).textTheme.bodySmall?.copyWith(
       fontSize: 11,
       height: 1.25,
       color: cs.onSurfaceVariant,
     );
-    final format = audioProvider.converterFormat;
-    final bitrate = audioProvider.converterBitrate;
-    final bitrateEnabled = format != 'wav' && format != 'flac';
 
     return SafeArea(
       child: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 132),
+        padding: EdgeInsets.fromLTRB(16, 0, 16, bottomInset),
         children: [
           TopPageHeader(
             icon: Icons.tune_rounded,
@@ -75,6 +103,21 @@ class SettingsTab extends StatelessWidget {
                       style: descStyle,
                     ),
                     secondary: const Icon(Icons.dark_mode_rounded),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  SwitchListTile(
+                    value: audioProvider.multiThreadPlaybackEnabled,
+                    onChanged: audioProvider.setMultiThreadPlaybackEnabled,
+                    title: Text(i18n.tr('multi_thread_playback')),
+                    subtitle: Text(
+                      i18n.tr('multi_thread_playback_subtitle'),
+                      style: descStyle,
+                    ),
+                    secondary: const Icon(Icons.multitrack_audio_rounded),
                     contentPadding: const EdgeInsets.symmetric(horizontal: 8),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(14),
@@ -130,6 +173,38 @@ class SettingsTab extends StatelessWidget {
                   ),
                   const SizedBox(height: 8),
                   ListTile(
+                    onTap: () => _openBatteryOptimizationSettings(context),
+                    title: Text(i18n.tr('background_keep_alive')),
+                    subtitle: FutureBuilder<bool>(
+                      future: _isIgnoringBatteryOptimizations(),
+                      builder: (context, snapshot) {
+                        final ignoring = snapshot.data == true;
+                        final status = ignoring
+                            ? i18n.tr('background_keep_alive_ready')
+                            : i18n.tr('background_keep_alive_subtitle');
+                        return Text(status, style: descStyle);
+                      },
+                    ),
+                    leading: Container(
+                      width: 38,
+                      height: 38,
+                      decoration: BoxDecoration(
+                        color: cs.tertiaryContainer,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
+                        Icons.battery_saver_rounded,
+                        color: cs.onTertiaryContainer,
+                      ),
+                    ),
+                    trailing: const Icon(Icons.open_in_new_rounded),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 2,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  ListTile(
                     onTap: () => _clearTempCache(context),
                     title: Text(i18n.tr('clear_temp_cache')),
                     subtitle: Text(
@@ -152,72 +227,6 @@ class SettingsTab extends StatelessWidget {
                       horizontal: 8,
                       vertical: 2,
                     ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 14),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(Icons.transform_rounded, color: cs.primary),
-                      const SizedBox(width: 8),
-                      Text(
-                        i18n.tr('transcode_defaults'),
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.w800),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _SelectField(
-                          label: i18n.tr('format'),
-                          value: format,
-                          items: AudioProvider.converterFormats,
-                          displayBuilder: (item) => item.toUpperCase(),
-                          onChanged: (value) {
-                            if (value != null) {
-                              audioProvider.setConverterSettings(format: value);
-                            }
-                          },
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _SelectField(
-                          label: i18n.tr('bitrate'),
-                          value: bitrate,
-                          items: AudioProvider.converterBitrates,
-                          displayBuilder: (item) => item,
-                          enabled: bitrateEnabled,
-                          onChanged: (value) {
-                            if (value != null) {
-                              audioProvider.setConverterSettings(
-                                bitrate: value,
-                              );
-                            }
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    bitrateEnabled
-                        ? i18n.tr('bitrate_used')
-                        : i18n.tr('bitrate_not_used', {
-                            'format': format.toUpperCase(),
-                          }),
-                    style: descStyle,
                   ),
                 ],
               ),
@@ -256,55 +265,6 @@ class SettingsTab extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _SelectField extends StatelessWidget {
-  const _SelectField({
-    required this.label,
-    required this.value,
-    required this.items,
-    required this.onChanged,
-    required this.displayBuilder,
-    this.enabled = true,
-  });
-
-  final String label;
-  final String value;
-  final List<String> items;
-  final ValueChanged<String?> onChanged;
-  final String Function(String) displayBuilder;
-  final bool enabled;
-
-  @override
-  Widget build(BuildContext context) {
-    return InputDecorator(
-      decoration: InputDecoration(
-        labelText: label,
-        enabled: enabled,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<String>(
-          isExpanded: true,
-          value: value,
-          borderRadius: BorderRadius.circular(14),
-          menuMaxHeight: 320,
-          onChanged: enabled ? onChanged : null,
-          items: items
-              .map(
-                (item) => DropdownMenuItem<String>(
-                  value: item,
-                  child: Text(
-                    displayBuilder(item),
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                ),
-              )
-              .toList(),
-        ),
       ),
     );
   }

@@ -10,6 +10,7 @@ class TopPageHeader extends StatelessWidget {
     this.trailing,
     this.titleSuffix,
     this.subtitle,
+    this.subtitleMaxLines = 2,
     this.padding = const EdgeInsets.fromLTRB(16, 16, 16, 0),
     this.bottomSpacing = 20,
   });
@@ -19,6 +20,7 @@ class TopPageHeader extends StatelessWidget {
   final Widget? trailing;
   final Widget? titleSuffix;
   final String? subtitle;
+  final int subtitleMaxLines;
   final EdgeInsetsGeometry padding;
   final double bottomSpacing;
 
@@ -42,17 +44,17 @@ class TopPageHeader extends StatelessWidget {
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                     colors: [
-                      cs.surface.withValues(alpha: 0.44),
-                      cs.surfaceContainerHighest.withValues(alpha: 0.2),
+                      cs.surface.withValues(alpha: 0.34),
+                      cs.surfaceContainerHighest.withValues(alpha: 0.14),
                     ],
                   ),
                   border: Border.all(
-                    color: cs.outlineVariant.withValues(alpha: 0.42),
+                    color: cs.outlineVariant.withValues(alpha: 0.32),
                   ),
                   boxShadow: [
                     BoxShadow(
-                      color: cs.shadow.withValues(alpha: 0.08),
-                      blurRadius: 24,
+                      color: cs.shadow.withValues(alpha: 0.06),
+                      blurRadius: 20,
                       offset: const Offset(0, 8),
                     ),
                   ],
@@ -64,9 +66,9 @@ class TopPageHeader extends StatelessWidget {
                       height: 42,
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(13),
-                        color: cs.primaryContainer.withValues(alpha: 0.78),
+                        color: cs.primaryContainer.withValues(alpha: 0.62),
                         border: Border.all(
-                          color: cs.outlineVariant.withValues(alpha: 0.35),
+                          color: cs.outlineVariant.withValues(alpha: 0.28),
                         ),
                       ),
                       child: Icon(icon, size: 22, color: cs.onPrimaryContainer),
@@ -97,10 +99,12 @@ class TopPageHeader extends StatelessWidget {
                             const SizedBox(height: 2),
                             Text(
                               subtitle!,
-                              maxLines: 1,
+                              maxLines: subtitleMaxLines,
                               overflow: TextOverflow.ellipsis,
                               style: Theme.of(context).textTheme.bodySmall
                                   ?.copyWith(
+                                    fontSize: 11,
+                                    height: 1.12,
                                     color: cs.onSurfaceVariant,
                                     fontWeight: FontWeight.w600,
                                   ),
