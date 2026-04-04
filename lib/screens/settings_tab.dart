@@ -232,38 +232,6 @@ class SettingsTab extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(height: 14),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(
-                        Icons.info_outline_rounded,
-                        color: cs.onSurfaceVariant,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        i18n.tr('about'),
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.w800),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    i18n.tr('app_version'),
-                    style: Theme.of(context).textTheme.bodyMedium,
-                  ),
-                  const SizedBox(height: 2),
-                  Text(i18n.tr('app_desc'), style: descStyle),
-                ],
-              ),
-            ),
-          ),
         ],
       ),
     );

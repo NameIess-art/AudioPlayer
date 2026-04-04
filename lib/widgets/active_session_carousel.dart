@@ -211,137 +211,135 @@ class _ActiveSessionCard extends StatelessWidget {
             child: InkWell(
               borderRadius: BorderRadius.circular(cardRadius),
               onTap: onOpen,
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(cardRadius),
-                child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 32, sigmaY: 32),
-                  child: Ink(
-                    height: 74,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(cardRadius),
-                      gradient: LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [
-                          cs.surface.withValues(alpha: 0.18),
-                          cs.surfaceContainerHigh.withValues(alpha: 0.08),
-                        ],
+              child: Ink(
+                height: 74,
+                decoration: BoxDecoration(
+                  color: isPlaying
+                      ? cs.surfaceContainerLow
+                      : cs.surfaceContainer,
+                  borderRadius: BorderRadius.circular(cardRadius),
+                  border: Border.all(
+                    color: isPlaying
+                        ? cs.primary.withValues(alpha: 0.32)
+                        : cs.outlineVariant.withValues(alpha: 0.8),
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: cs.shadow.withValues(
+                        alpha: isPlaying ? 0.1 : 0.06,
                       ),
-                      border: Border.all(
-                        color: isPlaying
-                            ? cs.primary.withValues(alpha: 0.36)
-                            : cs.outlineVariant.withValues(alpha: 0.28),
-                      ),
+                      blurRadius: isPlaying ? 22 : 16,
+                      offset: const Offset(0, 10),
                     ),
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
-                      child: Row(
-                        children: [
-                          _ActiveSessionCover(coverPathFuture: coverPathFuture),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: FutureBuilder<SubtitleTrack?>(
-                              future: provider.subtitleTrackForPath(
-                                session.currentTrackPath,
-                              ),
-                              builder: (context, snapshot) {
-                                final subtitleTrack = snapshot.data;
-                                return StreamBuilder<Duration>(
-                                  stream: session.player.positionStream,
-                                  initialData: session.player.position,
-                                  builder: (context, positionSnapshot) {
-                                    final subtitleText = provider
-                                        .subtitleTextForTrackAt(
-                                          session.currentTrackPath,
-                                          positionSnapshot.data ??
-                                              session.player.position,
-                                          subtitleTrack: subtitleTrack,
-                                        );
-
-                                    return Column(
-                                      mainAxisSize: MainAxisSize.min,
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          displayName,
-                                          maxLines: 2,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .titleSmall
-                                              ?.copyWith(
-                                                fontWeight: FontWeight.w900,
-                                                fontSize: 14,
-                                                height: 1.04,
-                                              ),
-                                        ),
-                                        if (subtitleText != null) ...[
-                                          const SizedBox(height: 1),
-                                          Text(
-                                            subtitleText,
-                                            maxLines: 2,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: Theme.of(context)
-                                                .textTheme
-                                                .bodySmall
-                                                ?.copyWith(
-                                                  color: cs.onSurface
-                                                      .withValues(alpha: 0.65),
-                                                  fontWeight: FontWeight.w500,
-                                                  fontSize: 10,
-                                                  height: 1.08,
-                                                ),
-                                          ),
-                                        ],
-                                      ],
+                  ],
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(10, 6, 8, 6),
+                  child: Row(
+                    children: [
+                      _ActiveSessionCover(coverPathFuture: coverPathFuture),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: FutureBuilder<SubtitleTrack?>(
+                          future: provider.subtitleTrackForPath(
+                            session.currentTrackPath,
+                          ),
+                          builder: (context, snapshot) {
+                            final subtitleTrack = snapshot.data;
+                            return StreamBuilder<Duration>(
+                              stream: session.player.positionStream,
+                              initialData: session.player.position,
+                              builder: (context, positionSnapshot) {
+                                final subtitleText = provider
+                                    .subtitleTextForTrackAt(
+                                      session.currentTrackPath,
+                                      positionSnapshot.data ??
+                                          session.player.position,
+                                      subtitleTrack: subtitleTrack,
                                     );
-                                  },
+
+                                return Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      displayName,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .titleSmall
+                                          ?.copyWith(
+                                            fontWeight: FontWeight.w900,
+                                            fontSize: 14,
+                                            height: 1.08,
+                                          ),
+                                    ),
+                                    if (subtitleText != null) ...[
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        subtitleText,
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodySmall
+                                            ?.copyWith(
+                                              color: cs.onSurfaceVariant,
+                                              fontWeight: FontWeight.w600,
+                                              fontSize: 10.2,
+                                              height: 1.15,
+                                            ),
+                                      ),
+                                    ],
+                                  ],
                                 );
                               },
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          IconButton.filledTonal(
-                            onPressed: session.isLoading
-                                ? null
-                                : () {
-                                    Feedback.forTap(context);
-                                    provider.toggleSessionPlayPause(session.id);
-                                  },
-                            style: IconButton.styleFrom(
-                              minimumSize: const Size(48, 48),
-                              maximumSize: const Size(48, 48),
-                              backgroundColor: cs.surface.withValues(
-                                alpha: 0.22,
-                              ),
-                              foregroundColor: cs.onSurface,
-                              shape: const CircleBorder(),
-                              side: BorderSide(
-                                color: cs.outlineVariant.withValues(
-                                  alpha: 0.36,
-                                ),
-                              ),
-                            ),
-                            icon: _CarouselSwitcherSlot(
-                              width: 22,
-                              height: 22,
-                              duration: const Duration(milliseconds: 150),
-                              child: Icon(
-                                isPlaying
-                                    ? Icons.pause_rounded
-                                    : Icons.play_arrow_rounded,
-                                key: ValueKey<IconData>(
-                                  isPlaying
-                                      ? Icons.pause_rounded
-                                      : Icons.play_arrow_rounded,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
+                            );
+                          },
+                        ),
                       ),
-                    ),
+                      const SizedBox(width: 8),
+                      IconButton.filledTonal(
+                        onPressed: session.isLoading
+                            ? null
+                            : () {
+                                Feedback.forTap(context);
+                                provider.toggleSessionPlayPause(session.id);
+                              },
+                        style: IconButton.styleFrom(
+                          minimumSize: const Size(48, 48),
+                          maximumSize: const Size(48, 48),
+                          backgroundColor: isPlaying
+                              ? cs.primaryContainer
+                              : cs.surfaceContainerLow,
+                          foregroundColor: isPlaying
+                              ? cs.onPrimaryContainer
+                              : cs.onSurface,
+                          shape: const CircleBorder(),
+                          side: BorderSide(
+                            color: isPlaying
+                                ? cs.primary.withValues(alpha: 0.24)
+                                : cs.outlineVariant.withValues(alpha: 0.72),
+                          ),
+                        ),
+                        icon: _CarouselSwitcherSlot(
+                          width: 22,
+                          height: 22,
+                          duration: const Duration(milliseconds: 150),
+                          child: Icon(
+                            isPlaying
+                                ? Icons.pause_rounded
+                                : Icons.play_arrow_rounded,
+                            key: ValueKey<IconData>(
+                              isPlaying
+                                  ? Icons.pause_rounded
+                                  : Icons.play_arrow_rounded,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),

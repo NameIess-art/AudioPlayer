@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -132,89 +131,75 @@ class AppFeedbackSurface extends StatelessWidget {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final accent = _accentColor(context, tone);
-    final chipBackground = accent.withValues(alpha: 0.08);
+    final chipBackground = accent.withValues(alpha: 0.12);
 
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(borderRadius),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                cs.surface.withValues(alpha: 0.34),
-                cs.surfaceContainerHigh.withValues(alpha: 0.18),
-              ],
-            ),
-            borderRadius: BorderRadius.circular(borderRadius),
-            border: Border.all(color: accent.withValues(alpha: 0.12)),
-            boxShadow: [
-              BoxShadow(
-                color: cs.shadow.withValues(alpha: 0.06),
-                blurRadius: 16,
-                offset: const Offset(0, 8),
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(borderRadius),
+        border: Border.all(color: accent.withValues(alpha: 0.16)),
+        boxShadow: [
+          BoxShadow(
+            color: cs.shadow.withValues(alpha: 0.08),
+            blurRadius: 18,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: padding,
+        child: Row(
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: chipBackground,
+                borderRadius: BorderRadius.circular(12),
               ),
-            ],
-          ),
-          child: Padding(
-            padding: padding,
-            child: Row(
-              children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    color: chipBackground,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: accent.withValues(alpha: 0.10)),
-                  ),
-                  child: Icon(icon, size: 18, color: accent),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (title != null) ...[
-                        Text(
-                          title!,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.labelLarge?.copyWith(
-                            color: cs.onSurface,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                      ],
-                      Text(
-                        message,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style:
-                            (title != null
-                                    ? theme.textTheme.bodyMedium
-                                    : theme.textTheme.titleSmall)
-                                ?.copyWith(
-                                  color: title != null
-                                      ? cs.onSurfaceVariant
-                                      : cs.onSurface,
-                                  fontWeight: title != null
-                                      ? FontWeight.w600
-                                      : FontWeight.w800,
-                                  height: 1.25,
-                                ),
-                      ),
-                    ],
-                  ),
-                ),
-                if (trailing != null) ...[const SizedBox(width: 12), trailing!],
-              ],
+              child: Icon(icon, size: 18, color: accent),
             ),
-          ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (title != null) ...[
+                    Text(
+                      title!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.labelLarge?.copyWith(
+                        color: cs.onSurface,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                  ],
+                  Text(
+                    message,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style:
+                        (title != null
+                                ? theme.textTheme.bodyMedium
+                                : theme.textTheme.titleSmall)
+                            ?.copyWith(
+                              color: title != null
+                                  ? cs.onSurfaceVariant
+                                  : cs.onSurface,
+                              fontWeight: title != null
+                                  ? FontWeight.w600
+                                  : FontWeight.w800,
+                              height: 1.25,
+                            ),
+                  ),
+                ],
+              ),
+            ),
+            if (trailing != null) ...[const SizedBox(width: 12), trailing!],
+          ],
         ),
       ),
     );

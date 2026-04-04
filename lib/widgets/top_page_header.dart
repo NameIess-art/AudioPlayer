@@ -1,5 +1,3 @@
-import 'dart:ui';
-
 import 'package:flutter/material.dart';
 
 class TopPageHeader extends StatelessWidget {
@@ -32,94 +30,75 @@ class TopPageHeader extends StatelessWidget {
       padding: padding,
       child: Column(
         children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(22),
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-              child: Container(
-                padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(22),
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [
-                      cs.surface.withValues(alpha: 0.34),
-                      cs.surfaceContainerHighest.withValues(alpha: 0.14),
-                    ],
-                  ),
-                  border: Border.all(
-                    color: cs.outlineVariant.withValues(alpha: 0.32),
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: cs.shadow.withValues(alpha: 0.06),
-                      blurRadius: 20,
-                      offset: const Offset(0, 8),
-                    ),
-                  ],
+          Container(
+            padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+            decoration: BoxDecoration(
+              color: cs.surfaceContainerLow,
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(
+                color: cs.outlineVariant.withValues(alpha: 0.78),
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: cs.shadow.withValues(alpha: 0.08),
+                  blurRadius: 24,
+                  offset: const Offset(0, 12),
                 ),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 42,
-                      height: 42,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(13),
-                        color: cs.primaryContainer.withValues(alpha: 0.62),
-                        border: Border.all(
-                          color: cs.outlineVariant.withValues(alpha: 0.28),
-                        ),
-                      ),
-                      child: Icon(icon, size: 22, color: cs.onPrimaryContainer),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+              ],
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 46,
+                  height: 46,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(15),
+                    color: cs.primaryContainer,
+                  ),
+                  child: Icon(icon, size: 22, color: cs.onPrimaryContainer),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
                         children: [
-                          Row(
-                            children: [
-                              Flexible(
-                                child: Text(
-                                  title,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: Theme.of(context).textTheme.titleLarge
-                                      ?.copyWith(fontWeight: FontWeight.w800),
-                                ),
-                              ),
-                              if (titleSuffix != null) ...[
-                                const SizedBox(width: 8),
-                                titleSuffix!,
-                              ],
-                            ],
-                          ),
-                          if (subtitle != null) ...[
-                            const SizedBox(height: 2),
-                            Text(
-                              subtitle!,
-                              maxLines: subtitleMaxLines,
+                          Flexible(
+                            child: Text(
+                              title,
+                              maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.bodySmall
-                                  ?.copyWith(
-                                    fontSize: 11,
-                                    height: 1.12,
-                                    color: cs.onSurfaceVariant,
-                                    fontWeight: FontWeight.w600,
-                                  ),
+                              style: Theme.of(context).textTheme.titleLarge
+                                  ?.copyWith(fontWeight: FontWeight.w800),
                             ),
+                          ),
+                          if (titleSuffix != null) ...[
+                            const SizedBox(width: 8),
+                            titleSuffix!,
                           ],
                         ],
                       ),
-                    ),
-                    if (trailing != null) ...[
-                      const SizedBox(width: 10),
-                      trailing!,
+                      if (subtitle != null) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          subtitle!,
+                          maxLines: subtitleMaxLines,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                fontSize: 11,
+                                height: 1.2,
+                                color: cs.onSurfaceVariant,
+                                fontWeight: FontWeight.w600,
+                              ),
+                        ),
+                      ],
                     ],
-                  ],
+                  ),
                 ),
-              ),
+                if (trailing != null) ...[const SizedBox(width: 12), trailing!],
+              ],
             ),
           ),
           SizedBox(height: bottomSpacing),

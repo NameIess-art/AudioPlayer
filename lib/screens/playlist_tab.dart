@@ -360,10 +360,10 @@ class _SessionListCardState extends State<_SessionListCard> {
         final cardShape = RoundedRectangleBorder(
           side: BorderSide(
             color: isPlaying
-                ? cs.primary.withValues(alpha: 0.48)
-                : cs.outlineVariant,
+                ? cs.primary.withValues(alpha: 0.3)
+                : cs.outlineVariant.withValues(alpha: 0.82),
           ),
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(22),
         );
 
         return TapRegion(
@@ -512,7 +512,11 @@ class _SessionListCardState extends State<_SessionListCard> {
                           margin: EdgeInsets.zero,
                           clipBehavior: Clip.antiAlias,
                           shape: cardShape,
-                          color: cs.surface,
+                          color: isPlaying
+                              ? cs.surfaceContainerLow
+                              : cs.surfaceContainer,
+                          elevation: 0,
+                          shadowColor: Colors.transparent,
                           child: InkWell(
                             onTap: _isOpen
                                 ? _closeActionPane
@@ -521,12 +525,7 @@ class _SessionListCardState extends State<_SessionListCard> {
                                     widget.onOpen();
                                   },
                             child: Padding(
-                              padding: const EdgeInsets.fromLTRB(
-                                12,
-                                5,
-                                10,
-                                5,
-                              ),
+                              padding: const EdgeInsets.fromLTRB(12, 8, 10, 8),
                               child: Row(
                                 children: [
                                   _SessionCoverThumbnail(
@@ -548,10 +547,9 @@ class _SessionListCardState extends State<_SessionListCard> {
                                               .textTheme
                                               .bodySmall
                                               ?.copyWith(
-                                                color: cs.onSurfaceVariant
-                                                    .withValues(alpha: 0.65),
-                                                fontWeight: FontWeight.w500,
-                                                fontSize: 10,
+                                                color: cs.onSurfaceVariant,
+                                                fontWeight: FontWeight.w600,
+                                                fontSize: 10.2,
                                               ),
                                         ),
                                         const SizedBox(height: 3),
@@ -565,7 +563,7 @@ class _SessionListCardState extends State<_SessionListCard> {
                                               ?.copyWith(
                                                 fontWeight: FontWeight.w900,
                                                 fontSize: 14,
-                                                height: 1.06,
+                                                height: 1.12,
                                               ),
                                         ),
                                         const SizedBox(height: 6),
@@ -592,6 +590,21 @@ class _SessionListCardState extends State<_SessionListCard> {
                                               session.id,
                                             );
                                           },
+                                    style: IconButton.styleFrom(
+                                      backgroundColor: isPlaying
+                                          ? cs.primaryContainer
+                                          : cs.surfaceContainerLow,
+                                      foregroundColor: isPlaying
+                                          ? cs.onPrimaryContainer
+                                          : cs.onSurface,
+                                      side: BorderSide(
+                                        color: isPlaying
+                                            ? cs.primary.withValues(alpha: 0.2)
+                                            : cs.outlineVariant.withValues(
+                                                alpha: 0.72,
+                                              ),
+                                      ),
+                                    ),
                                     icon: _SwitcherSlot(
                                       width: 22,
                                       height: 22,
@@ -631,7 +644,7 @@ class _SessionListCardState extends State<_SessionListCard> {
                           ignoring: true,
                           child: DecoratedBox(
                             decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(14),
+                              borderRadius: BorderRadius.circular(22),
                               border: Border.all(
                                 color: cs.outlineVariant.withValues(
                                   alpha: 0.18,

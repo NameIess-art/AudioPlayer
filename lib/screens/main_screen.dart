@@ -380,20 +380,18 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                                 ),
                                 child: DecoratedBox(
                                   decoration: BoxDecoration(
-                                    color: cs.surface.withValues(alpha: 0.9),
+                                    color: cs.surfaceContainerLow,
                                     borderRadius: radius,
                                     border: Border.all(
                                       color: cs.outlineVariant.withValues(
-                                        alpha: 0.75,
+                                        alpha: 0.85,
                                       ),
                                     ),
                                     boxShadow: [
                                       BoxShadow(
-                                        color: cs.shadow.withValues(
-                                          alpha: 0.08,
-                                        ),
-                                        blurRadius: 20,
-                                        offset: const Offset(0, 8),
+                                        color: cs.shadow.withValues(alpha: 0.1),
+                                        blurRadius: 28,
+                                        offset: const Offset(0, 12),
                                       ),
                                     ],
                                   ),
@@ -485,7 +483,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
       return Expanded(
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 1),
+          padding: const EdgeInsets.symmetric(horizontal: 2),
           child: Semantics(
             button: true,
             selected: selected,
@@ -493,12 +491,25 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
             child: Material(
               color: Colors.transparent,
               child: InkWell(
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(18),
                 onTap: () => _switchPage(index),
-                child: Padding(
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 180),
+                  curve: Curves.easeOutCubic,
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 2,
-                    vertical: 5,
+                    horizontal: 6,
+                    vertical: 7,
+                  ),
+                  decoration: BoxDecoration(
+                    color: selected
+                        ? _appleMusicAccent.withValues(alpha: 0.12)
+                        : Colors.transparent,
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(
+                      color: selected
+                          ? _appleMusicAccent.withValues(alpha: 0.24)
+                          : Colors.transparent,
+                    ),
                   ),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
@@ -519,13 +530,13 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                           color: selected ? _appleMusicAccent : inactive,
                         ),
                       ),
-                      const SizedBox(height: 1),
+                      const SizedBox(height: 3),
                       Text(
                         label,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          fontSize: 9,
+                          fontSize: 9.4,
                           fontWeight: selected
                               ? FontWeight.w700
                               : FontWeight.w600,
@@ -590,13 +601,12 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
               if (overlaySessions.isNotEmpty) const SizedBox(height: 6),
               _FloatingGlassPanel(
                 radius: 24,
-                blurSigma: 30,
-                borderOpacity: 0.18,
-                padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
-                shadowOpacity: 0.14,
+                padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+                borderOpacity: 0.8,
+                shadowOpacity: 0.11,
                 showTopHighlight: false,
-                primaryFillOpacity: 0.05,
-                secondaryFillOpacity: 0.015,
+                primaryFillOpacity: 1,
+                secondaryFillOpacity: 0.82,
                 child: _buildBottomBar(context),
               ),
             ],
@@ -618,9 +628,16 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       margin: const EdgeInsets.fromLTRB(16, 18, 8, 18),
       padding: const EdgeInsets.fromLTRB(10, 16, 10, 10),
       decoration: BoxDecoration(
-        color: cs.surface.withValues(alpha: 0.9),
+        color: cs.surfaceContainerLow,
         borderRadius: BorderRadius.circular(26),
-        border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.75)),
+        border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.85)),
+        boxShadow: [
+          BoxShadow(
+            color: cs.shadow.withValues(alpha: 0.1),
+            blurRadius: 28,
+            offset: const Offset(0, 14),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -821,10 +838,10 @@ class _AmbientBackground extends StatelessWidget {
           end: Alignment.bottomRight,
           colors: [
             cs.surface,
-            cs.surfaceContainerHigh.withValues(alpha: 0.94),
-            cs.surface,
+            cs.surfaceContainer.withValues(alpha: 0.94),
+            cs.surfaceContainerLow,
           ],
-          stops: const [0, 0.45, 1],
+          stops: const [0, 0.5, 1],
         ),
       ),
       child: Stack(
@@ -833,16 +850,16 @@ class _AmbientBackground extends StatelessWidget {
             left: -96,
             top: -64,
             child: _GlowOrb(
-              color: cs.primary.withValues(alpha: 0.16),
-              size: 260,
+              color: cs.primary.withValues(alpha: 0.08),
+              size: 220,
             ),
           ),
           Positioned(
             right: -72,
             bottom: -86,
             child: _GlowOrb(
-              color: cs.tertiary.withValues(alpha: 0.14),
-              size: 232,
+              color: cs.tertiary.withValues(alpha: 0.07),
+              size: 196,
             ),
           ),
         ],
@@ -989,7 +1006,6 @@ class _FloatingGlassPanel extends StatelessWidget {
   const _FloatingGlassPanel({
     required this.child,
     this.radius = 24,
-    this.blurSigma = 26,
     this.padding = EdgeInsets.zero,
     this.borderOpacity = 0.42,
     this.shadowOpacity = 0.22,
@@ -1000,7 +1016,6 @@ class _FloatingGlassPanel extends StatelessWidget {
 
   final Widget child;
   final double radius;
-  final double blurSigma;
   final EdgeInsetsGeometry padding;
   final double borderOpacity;
   final double shadowOpacity;
@@ -1012,58 +1027,50 @@ class _FloatingGlassPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
 
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(radius),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: blurSigma, sigmaY: blurSigma),
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(radius),
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                cs.surface.withValues(alpha: primaryFillOpacity),
-                cs.surfaceContainerHighest.withValues(
-                  alpha: secondaryFillOpacity,
-                ),
-              ],
-            ),
-            border: Border.all(
-              color: cs.outlineVariant.withValues(alpha: borderOpacity),
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: cs.shadow.withValues(alpha: shadowOpacity),
-                blurRadius: 36,
-                offset: const Offset(0, 16),
-              ),
-            ],
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(radius),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            cs.surfaceContainerLow.withValues(alpha: primaryFillOpacity),
+            cs.surfaceContainer.withValues(alpha: secondaryFillOpacity),
+          ],
+        ),
+        border: Border.all(
+          color: cs.outlineVariant.withValues(alpha: borderOpacity),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: cs.shadow.withValues(alpha: shadowOpacity),
+            blurRadius: 26,
+            offset: const Offset(0, 14),
           ),
-          child: Stack(
-            children: [
-              if (showTopHighlight)
-                Positioned.fill(
-                  child: IgnorePointer(
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [
-                            Colors.white.withValues(alpha: 0.07),
-                            Colors.white.withValues(alpha: 0),
-                          ],
-                          stops: const [0, 0.26],
-                        ),
-                      ),
+        ],
+      ),
+      child: Stack(
+        children: [
+          if (showTopHighlight)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Colors.white.withValues(alpha: 0.045),
+                        Colors.white.withValues(alpha: 0),
+                      ],
+                      stops: const [0, 0.22],
                     ),
                   ),
                 ),
-              Padding(padding: padding, child: child),
-            ],
-          ),
-        ),
+              ),
+            ),
+          Padding(padding: padding, child: child),
+        ],
       ),
     );
   }
@@ -1081,7 +1088,11 @@ class _DockTimerChip extends StatelessWidget {
 
     return _FloatingGlassPanel(
       radius: 20,
-      blurSigma: 24,
+      borderOpacity: 0.72,
+      shadowOpacity: 0.08,
+      showTopHighlight: false,
+      primaryFillOpacity: 1,
+      secondaryFillOpacity: 0.84,
       child: Material(
         color: Colors.transparent,
         child: InkWell(

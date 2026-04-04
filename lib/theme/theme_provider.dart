@@ -24,48 +24,58 @@ class ThemeProvider with ChangeNotifier {
 
   static final ColorScheme _lightScheme =
       ColorScheme.fromSeed(
-        seedColor: const Color(0xFF6C7B8B),
+        seedColor: const Color(0xFFE05A74),
         brightness: Brightness.light,
       ).copyWith(
-        primary: const Color(0xFF1B222E),
+        primary: const Color(0xFFD94B66),
         onPrimary: Colors.white,
-        secondary: const Color(0xFF4A5568),
+        secondary: const Color(0xFF526074),
         onSecondary: Colors.white,
-        tertiary: const Color(0xFF5A6B7C),
+        tertiary: const Color(0xFF7A6C93),
         onTertiary: Colors.white,
-        surface: const Color(0xFFF7F9FB),
-        onSurface: const Color(0xFF131821),
-        surfaceContainerHighest: const Color(0xFFE2E8F0),
-        surfaceContainerHigh: const Color(0xFFEDF2F7),
-        primaryContainer: const Color(0xFFD3DEF2),
-        onPrimaryContainer: const Color(0xFF161F2C),
-        secondaryContainer: const Color(0xFFE2E8F0),
-        onSecondaryContainer: const Color(0xFF1A212E),
-        outline: const Color(0xFF7A899E),
-        outlineVariant: const Color(0xFFCBD5E1),
+        surface: const Color(0xFFF7F4EE),
+        onSurface: const Color(0xFF1A1820),
+        surfaceContainerHighest: const Color(0xFFE2DBD1),
+        surfaceContainerHigh: const Color(0xFFEEE8DF),
+        surfaceContainer: const Color(0xFFF3EEE6),
+        surfaceContainerLow: const Color(0xFFFCFAF6),
+        primaryContainer: const Color(0xFFF9D7DE),
+        onPrimaryContainer: const Color(0xFF521D29),
+        secondaryContainer: const Color(0xFFDEE5EF),
+        onSecondaryContainer: const Color(0xFF202835),
+        tertiaryContainer: const Color(0xFFE6DDF4),
+        onTertiaryContainer: const Color(0xFF2B213A),
+        outline: const Color(0xFF8B7F78),
+        outlineVariant: const Color(0xFFD8CEC3),
+        shadow: const Color(0xFF211B1A),
       );
 
   static final ColorScheme _darkScheme =
       ColorScheme.fromSeed(
-        seedColor: const Color(0xFF90A4AE),
+        seedColor: const Color(0xFFFF6B88),
         brightness: Brightness.dark,
       ).copyWith(
-        primary: const Color(0xFFF1F5F9),
-        onPrimary: const Color(0xFF0F172A),
-        secondary: const Color(0xFFCBD5E1),
-        onSecondary: const Color(0xFF131C2D),
-        tertiary: const Color(0xFFB0BEC5),
-        onTertiary: const Color(0xFF111827),
-        surface: const Color(0xFF080D14),
-        onSurface: const Color(0xFFF5F7FA),
-        surfaceContainerHighest: const Color(0xFF1E293B),
-        surfaceContainerHigh: const Color(0xFF131B28),
-        primaryContainer: const Color(0xFF2E3E53),
-        onPrimaryContainer: const Color(0xFFF1F5F9),
-        secondaryContainer: const Color(0xFF263345),
-        onSecondaryContainer: const Color(0xFFE2E8F0),
-        outline: const Color(0xFF64748B),
-        outlineVariant: const Color(0xFF334155),
+        primary: const Color(0xFFFF8CA1),
+        onPrimary: const Color(0xFF35101A),
+        secondary: const Color(0xFFD4D9E2),
+        onSecondary: const Color(0xFF171D27),
+        tertiary: const Color(0xFFD7C8F1),
+        onTertiary: const Color(0xFF20182C),
+        surface: const Color(0xFF121017),
+        onSurface: const Color(0xFFF6F1EA),
+        surfaceContainerHighest: const Color(0xFF322C37),
+        surfaceContainerHigh: const Color(0xFF26212B),
+        surfaceContainer: const Color(0xFF211C25),
+        surfaceContainerLow: const Color(0xFF18141D),
+        primaryContainer: const Color(0xFF4D2430),
+        onPrimaryContainer: const Color(0xFFFFD9E0),
+        secondaryContainer: const Color(0xFF2B3340),
+        onSecondaryContainer: const Color(0xFFE6EBF5),
+        tertiaryContainer: const Color(0xFF372B4B),
+        onTertiaryContainer: const Color(0xFFF2E8FF),
+        outline: const Color(0xFF7B7481),
+        outlineVariant: const Color(0xFF433C47),
+        shadow: Colors.black,
       );
 
   ThemeData _buildTheme(ColorScheme scheme) {
@@ -77,16 +87,29 @@ class ThemeProvider with ChangeNotifier {
         fontWeight: FontWeight.w700,
         letterSpacing: 0.1,
       ),
-      labelMedium: GoogleFonts.raleway(fontSize: 10, fontWeight: FontWeight.w600),
-      labelSmall: GoogleFonts.raleway(fontSize: 9.5, fontWeight: FontWeight.w600),
+      labelMedium: GoogleFonts.raleway(
+        fontSize: 10,
+        fontWeight: FontWeight.w600,
+      ),
+      labelSmall: GoogleFonts.raleway(
+        fontSize: 9.5,
+        fontWeight: FontWeight.w600,
+      ),
       bodySmall: GoogleFonts.raleway(fontSize: 10, fontWeight: FontWeight.w500),
-      titleMedium: GoogleFonts.raleway(fontWeight: FontWeight.w800, fontSize: 14, height: 1.25),
+      titleMedium: GoogleFonts.raleway(
+        fontWeight: FontWeight.w800,
+        fontSize: 14,
+        height: 1.25,
+      ),
       titleLarge: GoogleFonts.lora(fontWeight: FontWeight.w800, fontSize: 18),
-      headlineSmall: GoogleFonts.lora(fontWeight: FontWeight.w900, fontSize: 20),
+      headlineSmall: GoogleFonts.lora(
+        fontWeight: FontWeight.w900,
+        fontSize: 20,
+      ),
     );
 
     final largeShape = RoundedRectangleBorder(
-      borderRadius: BorderRadius.circular(18),
+      borderRadius: BorderRadius.circular(20),
     );
 
     return ThemeData(
@@ -110,12 +133,16 @@ class ThemeProvider with ChangeNotifier {
       dividerColor: scheme.outlineVariant,
       splashFactory: InkRipple.splashFactory,
       cardTheme: CardThemeData(
-        color: scheme.surfaceContainerHigh,
+        color: scheme.surfaceContainerLow,
         elevation: 0,
         margin: EdgeInsets.zero,
+        shadowColor: scheme.shadow.withValues(alpha: 0.12),
+        surfaceTintColor: Colors.transparent,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(20),
-          side: BorderSide(color: scheme.outlineVariant),
+          borderRadius: BorderRadius.circular(24),
+          side: BorderSide(
+            color: scheme.outlineVariant.withValues(alpha: 0.82),
+          ),
         ),
       ),
       navigationRailTheme: NavigationRailThemeData(
@@ -179,7 +206,7 @@ class ThemeProvider with ChangeNotifier {
       ),
       navigationBarTheme: NavigationBarThemeData(
         height: 72,
-        backgroundColor: scheme.surfaceContainerHigh.withValues(alpha: 0.9),
+        backgroundColor: scheme.surfaceContainerLow,
         indicatorColor: scheme.primaryContainer,
         labelTextStyle: WidgetStateProperty.resolveWith((states) {
           final selected = states.contains(WidgetState.selected);
@@ -192,7 +219,7 @@ class ThemeProvider with ChangeNotifier {
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
+        fillColor: scheme.surfaceContainer,
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(14),
           borderSide: BorderSide(color: scheme.outlineVariant),
@@ -213,7 +240,7 @@ class ThemeProvider with ChangeNotifier {
         elevation: 0,
       ),
       snackBarTheme: SnackBarThemeData(
-        backgroundColor: scheme.surfaceContainerHigh,
+        backgroundColor: scheme.surfaceContainerLow,
         contentTextStyle: TextStyle(
           color: scheme.onSurface,
           fontWeight: FontWeight.w500,
