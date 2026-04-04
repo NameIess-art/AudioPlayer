@@ -209,6 +209,10 @@ const Map<AppLanguage, Map<String, String>> _localizedValues = {
     'go_settings': '去设置',
     'later': '稍后',
     'start_conversion': '开始转换',
+    'choose_library': '选择曲库',
+    'choose_library_folder': '选择曲库文件夹',
+    'import_library_done': '曲库导入完成：新增 {folderCount} 个根文件夹，{count} 首音频。',
+    'no_child_folder_found': '所选文件夹下没有可导入的下一层文件夹。',
   },
   AppLanguage.ja: {
     'app_title': 'ローカル音楽プレーヤー',
@@ -352,6 +356,11 @@ const Map<AppLanguage, Map<String, String>> _localizedValues = {
     'go_settings': '設定を開く',
     'later': 'あとで',
     'start_conversion': '変換開始',
+    'choose_library': '曲庫を選択',
+    'choose_library_folder': '曲庫フォルダを選択',
+    'import_library_done':
+        '曲庫の取り込みが完了しました。{folderCount} 個のルートフォルダと {count} 曲を追加しました。',
+    'no_child_folder_found': '選択したフォルダの直下に取り込める子フォルダがありません。',
   },
   AppLanguage.en: {
     'app_title': 'Local Music Player',
@@ -510,5 +519,11 @@ const Map<AppLanguage, Map<String, String>> _localizedValues = {
     'go_settings': 'Open settings',
     'later': 'Later',
     'start_conversion': 'Start conversion',
+    'choose_library': 'Choose Library',
+    'choose_library_folder': 'Choose library folder',
+    'import_library_done':
+        'Library import complete: {folderCount} root folders and {count} new tracks added.',
+    'no_child_folder_found':
+        'No importable child folders were found directly inside the selected folder.',
   },
 };

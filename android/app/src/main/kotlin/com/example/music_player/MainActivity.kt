@@ -80,7 +80,6 @@ private data class UnifiedPlaybackNotificationItem(
     val id: String,
     val title: String,
     val subtitle: String?,
-    val description: String?,
     val artPath: String?,
     val playing: Boolean,
     val hasPrevious: Boolean,
@@ -207,10 +206,11 @@ private object UnifiedPlaybackNotificationController {
         context: Context,
         item: UnifiedPlaybackNotificationItem
     ): android.app.Notification {
+        val subtitle = item.subtitle?.takeIf { it.isNotBlank() }
         val builder = NotificationCompat.Builder(context, channelId)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(item.title)
-            .setContentText(item.subtitle ?: item.description)
+            .setContentText(subtitle)
             .setSubText(null)
             .setContentIntent(buildLaunchIntent(context))
             .setShowWhen(false)
@@ -260,9 +260,6 @@ private object UnifiedPlaybackNotificationController {
 
         val mediaStyle = MediaStyle()
             .setShowActionsInCompactView(*compactActionIndices.toIntArray())
-        com.ryanheise.audioservice.AudioService
-            .getMediaSessionTokenCompat()
-            ?.let(mediaStyle::setMediaSession)
         builder.setStyle(mediaStyle)
         return builder.build()
     }
@@ -455,7 +452,6 @@ class MainActivity : AudioServiceActivity() {
                                 id = id,
                                 title = title,
                                 subtitle = raw["subtitle"] as? String,
-                                description = raw["description"] as? String,
                                 artPath = raw["artPath"] as? String,
                                 playing = raw["playing"] as? Boolean ?: false,
                                 hasPrevious = raw["hasPrevious"] as? Boolean ?: false,
@@ -544,6 +540,27 @@ class MainActivity : AudioServiceActivity() {
                             } catch (e: Exception) {
                                 runOnUiThread {
                                     result.error("scan_failed", e.message ?: "unknown error", null)
+                                }
+                            }
+                        }.start()
+                    }
+                    "listChildFolders" -> {
+                        val folder = call.argument<String>("folder")
+                        if (folder.isNullOrBlank()) {
+                            result.error("invalid_args", "folder is required", null)
+                            return@setMethodCallHandler
+                        }
+                        Thread {
+                            try {
+                                val folders = listChildFolders(folder)
+                                runOnUiThread { result.success(folders) }
+                            } catch (e: Exception) {
+                                runOnUiThread {
+                                    result.error(
+                                        "list_child_folders_failed",
+                                        e.message ?: "unknown error",
+                                        null
+                                    )
                                 }
                             }
                         }.start()
@@ -808,6 +825,39 @@ class MainActivity : AudioServiceActivity() {
 
         scanMediaStore(folderTrimmed, byPath)
         return byPath.values.toList()
+    }
+
+    private fun listChildFolders(folder: String): List<String> {
+        val folderTrimmed = folder.trim()
+        val uri = resolveContentUri(folderTrimmed)
+
+        if (uri != null) {
+            val treeRoot = DocumentFile.fromTreeUri(this, uri)
+            val root = treeRoot ?: DocumentFile.fromSingleUri(this, uri) ?: return emptyList()
+            if (!root.exists()) return emptyList()
+            return try {
+                root.listFiles()
+                    .filter { it.isDirectory }
+                    .map { it.uri.toString() }
+                    .sortedBy { it.lowercase(Locale.US) }
+            } catch (_: Exception) {
+                emptyList()
+            }
+        }
+
+        val root = File(folderTrimmed)
+        if (!root.exists() || !root.isDirectory) {
+            return emptyList()
+        }
+        return try {
+            root.listFiles()
+                ?.filter { it.isDirectory }
+                ?.map { it.absolutePath }
+                ?.sortedBy { it.lowercase(Locale.US) }
+                ?: emptyList()
+        } catch (_: Exception) {
+            emptyList()
+        }
     }
 
     private fun resolveContentUri(rawFolder: String): Uri? {

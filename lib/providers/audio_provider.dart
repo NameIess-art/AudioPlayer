@@ -245,6 +245,9 @@ class AudioProvider with ChangeNotifier {
   static const Duration _notificationProgressRefreshInterval = Duration(
     milliseconds: 750,
   );
+  static const Duration _multiSessionNotificationRefreshInterval = Duration(
+    milliseconds: 1500,
+  );
   static const MethodChannel _powerChannel = MethodChannel(
     'music_player/power',
   );
@@ -563,8 +566,16 @@ class AudioProvider with ChangeNotifier {
     await seekSession(session.id, position);
   }
 
+  List<PlaybackSession> get _singleThreadNotificationSessions {
+    return activeSessions
+        .where((session) => session.state.playing || session.isLoading)
+        .toList(growable: false);
+  }
+
   List<PlaybackSession> get _notificationQueueSessions {
-    return activeSessions;
+    return _multiThreadPlaybackEnabled
+        ? activeSessions
+        : _singleThreadNotificationSessions;
   }
 
   PlaybackSession? get _notificationFocusedSession {
@@ -961,6 +972,10 @@ class AudioProvider with ChangeNotifier {
       return;
     }
 
+    if (_shouldUseUnifiedPlaybackNotifications) {
+      immediate = false;
+    }
+
     if (immediate) {
       _notificationProgressRefreshTimer?.cancel();
       _notificationProgressRefreshTimer = null;
@@ -974,28 +989,23 @@ class AudioProvider with ChangeNotifier {
       return;
     }
 
-    _notificationProgressRefreshTimer = Timer(
-      _notificationProgressRefreshInterval,
-      () {
-        _notificationProgressRefreshTimer = null;
-        final queuedSessionId = _queuedNotificationRefreshSessionId;
-        _queuedNotificationRefreshSessionId = null;
-        if (queuedSessionId == null ||
-            _notificationFocusedSession?.id != queuedSessionId) {
-          return;
-        }
-        _syncNotificationState();
-      },
-    );
+    _notificationProgressRefreshTimer = Timer(_notificationRefreshInterval, () {
+      _notificationProgressRefreshTimer = null;
+      final queuedSessionId = _queuedNotificationRefreshSessionId;
+      _queuedNotificationRefreshSessionId = null;
+      if (queuedSessionId == null ||
+          _notificationFocusedSession?.id != queuedSessionId) {
+        return;
+      }
+      _syncNotificationState();
+    });
   }
 
   Future<void> _syncUnifiedPlaybackNotifications() async {
-    final sessionsToShow = activeSessions.length <= 1
-        ? const <PlaybackSession>[]
-        : activeSessions;
-    final showUnifiedSummary =
-        sessionsToShow.isNotEmpty &&
-        !sessionsToShow.any((session) => session.state.playing);
+    final sessionsToShow = _shouldUseUnifiedPlaybackNotifications
+        ? activeSessions
+        : const <PlaybackSession>[];
+    final showUnifiedSummary = sessionsToShow.isNotEmpty;
     final summaryText = showUnifiedSummary
         ? _notificationSummaryText(sessionsToShow)
         : null;
@@ -1008,14 +1018,11 @@ class AudioProvider with ChangeNotifier {
           final title = _notificationTitleForSession(session);
           final subtitle = _notificationSubtitleForSession(session);
           final track = trackByPath(session.currentTrackPath);
-          final description = track?.groupSubtitle ?? track?.groupTitle;
           final artPath = coverPathForTrack(track);
           return <String, dynamic>{
             'id': session.id,
             'title': title,
             if (subtitle != null && subtitle.isNotEmpty) 'subtitle': subtitle,
-            if (description != null && description.isNotEmpty)
-              'description': description,
             if (artPath != null && artPath.isNotEmpty) 'artPath': artPath,
             'playing': session.state.playing,
             'hasPrevious': _nextPathFor(session, forward: false) != null,
@@ -1533,7 +1540,7 @@ class AudioProvider with ChangeNotifier {
     if (_multiThreadPlaybackEnabled == enabled) return;
     _multiThreadPlaybackEnabled = enabled;
     if (!enabled) {
-      await _enforceSingleThreadPlayback();
+      await _resetSessionsForSingleThreadMode();
     }
     notifyListeners();
     unawaited(_savePlaybackSettings());
@@ -1999,12 +2006,21 @@ class AudioProvider with ChangeNotifier {
 
   String? _notificationSubtitleForSession(PlaybackSession session) {
     _ensureSubtitleTrackLoaded(session.currentTrackPath);
-    return subtitleTextForTrackAt(
-      session.currentTrackPath,
-      session.player.position,
-      subtitleTrack: _subtitleTracks[session.currentTrackPath],
-    );
+    if (_notificationSubtitleTrackPaths[session.id] !=
+            session.currentTrackPath ||
+        !_notificationSubtitleTexts.containsKey(session.id)) {
+      _refreshNotificationSubtitleForSession(session, syncNotification: false);
+    }
+    return _notificationSubtitleTexts[session.id];
   }
+
+  bool get _shouldUseUnifiedPlaybackNotifications =>
+      _multiThreadPlaybackEnabled && activeSessions.length > 1;
+
+  Duration get _notificationRefreshInterval =>
+      _shouldUseUnifiedPlaybackNotifications
+      ? _multiSessionNotificationRefreshInterval
+      : _notificationProgressRefreshInterval;
 
   void _ensureSubtitleTrackLoaded(String trackPath) {
     if (_subtitleTracks.containsKey(trackPath) ||
@@ -2764,6 +2780,22 @@ class AudioProvider with ChangeNotifier {
     }
   }
 
+  Future<void> _resetSessionsForSingleThreadMode() async {
+    if (_sessions.isEmpty) {
+      _notificationFocusSessionId = null;
+      _syncNotificationState();
+      return;
+    }
+
+    await Future.wait(
+      _sessions.values.map((session) => session.player.pause()),
+    );
+    _syncKeepCpuAwake();
+    _notificationFocusSessionId = null;
+    _syncNotificationState();
+    notifyListeners();
+  }
+
   Future<void> _enforceSingleThreadPlayback({
     String? preferredSessionId,
   }) async {
@@ -2779,9 +2811,15 @@ class AudioProvider with ChangeNotifier {
           (session) => session.id != keepSessionId && session.state.playing,
         )
         .toList(growable: false);
-    if (sessionsToPause.isEmpty) return;
+    _notificationFocusSessionId = keepSessionId;
+    if (sessionsToPause.isEmpty) {
+      _syncNotificationState();
+      notifyListeners();
+      return;
+    }
 
     await Future.wait(sessionsToPause.map((session) => session.player.pause()));
+    _notificationFocusSessionId = keepSessionId;
     _syncKeepCpuAwake();
     _syncNotificationState();
     notifyListeners();

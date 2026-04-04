@@ -114,6 +114,36 @@ class _LibraryTabState extends State<LibraryTab> {
     await _addFolderFromPath(folderPath);
   }
 
+  Future<void> _addLibrary() async {
+    final i18n = context.read<AppLanguageProvider>();
+    final permissionGranted = await _ensureReadPermission();
+    if (!permissionGranted) {
+      _showSnack(i18n.tr('need_storage_permission_import_audio'));
+      return;
+    }
+
+    final folderPath = await FilePicker.platform.getDirectoryPath(
+      dialogTitle: i18n.tr('choose_library_folder'),
+    );
+    if (folderPath == null || folderPath.isEmpty) return;
+
+    final childFolders = await _listImmediateChildFolders(folderPath);
+    if (childFolders.isEmpty) {
+      _showSnack(i18n.tr('no_child_folder_found'));
+      return;
+    }
+
+    await _addFoldersFromPaths(
+      childFolders,
+      completionMessageBuilder: (trackCount, folderCount) {
+        return i18n.tr('import_library_done', {
+          'count': trackCount,
+          'folderCount': folderCount,
+        });
+      },
+    );
+  }
+
   Future<void> _addFolderFromPath(String folderPath) async {
     final i18n = context.read<AppLanguageProvider>();
     final provider = context.read<AudioProvider>();
@@ -150,6 +180,61 @@ class _LibraryTabState extends State<LibraryTab> {
         provider.addWatchedFolder(folderPath, notify: false);
         provider.setScanning(false);
         _showSnack(i18n.tr('import_done_added', {'count': added}));
+      }
+    }
+  }
+
+  Future<void> _addFoldersFromPaths(
+    List<String> folderPaths, {
+    String Function(int trackCount, int folderCount)? completionMessageBuilder,
+  }) async {
+    final i18n = context.read<AppLanguageProvider>();
+    final provider = context.read<AudioProvider>();
+    final uniqueFolderPaths = LinkedHashSet<String>.from(
+      folderPaths
+          .map((folderPath) => folderPath.trim())
+          .where((folderPath) => folderPath.isNotEmpty),
+    ).toList(growable: false);
+    if (uniqueFolderPaths.isEmpty || !mounted) return;
+
+    provider.setScanning(true);
+    var added = 0;
+
+    try {
+      for (final folderPath in uniqueFolderPaths) {
+        final nativeTracks = await _scanFolderViaNative(folderPath);
+        if (nativeTracks != null) {
+          final toAdd = nativeTracks
+              .map(
+                (t) => MusicTrack(
+                  path: t.path,
+                  displayName:
+                      t.displayName ?? path.basenameWithoutExtension(t.path),
+                  groupKey: t.groupKey,
+                  groupTitle: t.groupTitle,
+                  groupSubtitle: t.groupSubtitle,
+                  isSingle: t.isSingle,
+                ),
+              )
+              .toList();
+
+          final beforeCount = provider.library.length;
+          provider.addTracks(toAdd, notify: false);
+          added += provider.library.length - beforeCount;
+        } else {
+          added += await _importFolderIncrementally(folderPath, provider);
+        }
+
+        if (!mounted) return;
+        provider.addWatchedFolder(folderPath, notify: false);
+      }
+    } finally {
+      if (mounted) {
+        provider.setScanning(false);
+        _showSnack(
+          completionMessageBuilder?.call(added, uniqueFolderPaths.length) ??
+              i18n.tr('import_done_added', {'count': added}),
+        );
       }
     }
   }
@@ -315,6 +400,42 @@ class _LibraryTabState extends State<LibraryTab> {
     }
   }
 
+  Future<List<String>> _listImmediateChildFolders(String folderPath) async {
+    if (Platform.isAndroid) {
+      try {
+        final data = await _fileCacheChannel.invokeMethod<List<dynamic>>(
+          'listChildFolders',
+          {'folder': folderPath},
+        );
+        if (data != null) {
+          final folders = data
+              .map((item) => item?.toString().trim() ?? '')
+              .where((item) => item.isNotEmpty)
+              .toList(growable: false);
+          if (folders.isNotEmpty) {
+            return folders;
+          }
+        }
+      } catch (_) {}
+    }
+
+    final directory = Directory(folderPath);
+    if (!await directory.exists()) return const <String>[];
+
+    final childFolders = <String>[];
+    try {
+      await for (final entity in directory.list(followLinks: false)) {
+        if (entity is! Directory) continue;
+        childFolders.add(path.normalize(entity.path));
+      }
+    } catch (_) {
+      return const <String>[];
+    }
+
+    childFolders.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return childFolders;
+  }
+
   Future<int> _importFolderIncrementally(
     String folderPath,
     AudioProvider provider,
@@ -421,10 +542,9 @@ class _LibraryTabState extends State<LibraryTab> {
           TopPageHeader(
             icon: Icons.library_music_rounded,
             title: i18n.tr('music_library'),
-            subtitle: i18n.tr(
-              'audio_count',
-              {'count': provider.library.length},
-            ),
+            subtitle: i18n.tr('audio_count', {
+              'count': provider.library.length,
+            }),
             trailing: SizedBox(
               width: 112,
               height: 44,
@@ -456,8 +576,9 @@ class _LibraryTabState extends State<LibraryTab> {
                           tooltip: i18n.tr('more_actions'),
                           onSelected: (value) {
                             if (value == 0) _addFolder();
-                            if (value == 1) _addFiles();
-                            if (value == 2) _openVideoConverterPage();
+                            if (value == 1) _addLibrary();
+                            if (value == 2) _addFiles();
+                            if (value == 3) _openVideoConverterPage();
                           },
                           itemBuilder: (context) => [
                             PopupMenuItem(
@@ -478,6 +599,19 @@ class _LibraryTabState extends State<LibraryTab> {
                               child: Row(
                                 children: [
                                   const Icon(
+                                    Icons.library_add_rounded,
+                                    size: 20,
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Text(i18n.tr('choose_library')),
+                                ],
+                              ),
+                            ),
+                            PopupMenuItem(
+                              value: 2,
+                              child: Row(
+                                children: [
+                                  const Icon(
                                     Icons.upload_file_rounded,
                                     size: 20,
                                   ),
@@ -487,7 +621,7 @@ class _LibraryTabState extends State<LibraryTab> {
                               ),
                             ),
                             PopupMenuItem(
-                              value: 2,
+                              value: 3,
                               child: Row(
                                 children: [
                                   const Icon(
@@ -660,10 +794,7 @@ class _FolderNodeWidgetState extends State<_FolderNodeWidget> {
     final confirmed = await showConfirmActionDialog(
       context: context,
       title: i18n.tr('remove_folder'),
-      message: i18n.tr(
-        'remove_folder_confirm',
-        {'name': widget.folder.name},
-      ),
+      message: i18n.tr('remove_folder_confirm', {'name': widget.folder.name}),
       cancelLabel: i18n.tr('cancel'),
       confirmLabel: i18n.tr('remove'),
       icon: Icons.delete_outline_rounded,
@@ -850,7 +981,9 @@ class _TrackNodeWidget extends StatelessWidget {
     final isAlreadyPlaying = context.select<AudioProvider, bool>(
       (value) => value.isTrackActive(track.path),
     );
-    final folderName = track.isSingle ? i18n.tr('imported_files') : track.groupTitle;
+    final folderName = track.isSingle
+        ? i18n.tr('imported_files')
+        : track.groupTitle;
     final cardShape = RoundedRectangleBorder(
       side: BorderSide(
         color: isAlreadyPlaying
@@ -897,11 +1030,12 @@ class _TrackNodeWidget extends StatelessWidget {
                         track.displayName,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w900,
-                          fontSize: 14,
-                          height: 1.06,
-                        ),
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(
+                              fontWeight: FontWeight.w900,
+                              fontSize: 14,
+                              height: 1.06,
+                            ),
                       ),
                     ],
                   ),
