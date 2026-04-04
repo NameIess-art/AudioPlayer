@@ -212,7 +212,7 @@ private object UnifiedPlaybackNotificationController {
             .setContentTitle(item.title)
             .setContentText(subtitle)
             .setSubText(null)
-            .setContentIntent(buildLaunchIntent(context))
+            .setContentIntent(buildLaunchIntent(context, sessionId = item.id))
             .setShowWhen(false)
             .setOnlyAlertOnce(true)
             .setSilent(true)
@@ -300,11 +300,24 @@ private object UnifiedPlaybackNotificationController {
         return builder.build()
     }
 
-    private fun buildLaunchIntent(context: Context): PendingIntent? {
+    private fun buildLaunchIntent(
+        context: Context,
+        sessionId: String? = null
+    ): PendingIntent? {
         val launchIntent = context.packageManager
             .getLaunchIntentForPackage(context.packageName)
             ?.apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP
+                )
+                if (sessionId.isNullOrBlank()) {
+                    removeExtra(MainActivity.notificationSessionIdExtra)
+                } else {
+                    action = MainActivity.openSessionFromNotificationAction
+                    putExtra(MainActivity.notificationSessionIdExtra, sessionId)
+                }
             }
             ?: return null
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or (
@@ -314,7 +327,12 @@ private object UnifiedPlaybackNotificationController {
                 0
             }
         )
-        return PendingIntent.getActivity(context, 0, launchIntent, flags)
+        val requestCode = if (sessionId.isNullOrBlank()) {
+            0
+        } else {
+            notificationIdFor(sessionId)
+        }
+        return PendingIntent.getActivity(context, requestCode, launchIntent, flags)
     }
 
     private fun buildControlIntent(
@@ -387,11 +405,19 @@ private enum class NotificationCommand(
 }
 
 class MainActivity : AudioServiceActivity() {
+    companion object {
+        const val notificationSessionIdExtra = "notificationSessionId"
+        const val openSessionFromNotificationAction =
+            "com.example.music_player.OPEN_SESSION_FROM_NOTIFICATION"
+    }
+
     private val fileCacheChannel = "music_player/file_cache"
     private val powerChannel = "music_player/power"
     private val notificationsChannel = "music_player/notifications"
     private val pickAudioSourceRequestCode = 7001
     private var pendingPickAudioResult: MethodChannel.Result? = null
+    private var notificationsMethodChannel: MethodChannel? = null
+    private var pendingNotificationSessionId: String? = null
     private val blockedExtensions = setOf(
         "vtt", "srt", "ass", "ssa", "lrc", "txt", "md", "json", "xml",
         "jpg", "jpeg", "png", "gif", "webp", "bmp", "heic", "heif",
@@ -427,8 +453,10 @@ class MainActivity : AudioServiceActivity() {
                 }
             }
 
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, notificationsChannel)
-            .setMethodCallHandler { call, result ->
+        notificationsMethodChannel =
+            MethodChannel(flutterEngine.dartExecutor.binaryMessenger, notificationsChannel)
+        capturePendingNotificationSession(intent)
+        notificationsMethodChannel?.setMethodCallHandler { call, result ->
                 when (call.method) {
                     "areNotificationsEnabled" -> {
                         result.success(
@@ -470,6 +498,11 @@ class MainActivity : AudioServiceActivity() {
                     "clearUnifiedPlaybackNotifications" -> {
                         UnifiedPlaybackNotificationController.clear(this)
                         result.success(null)
+                    }
+                    "consumePendingNotificationSessionId" -> {
+                        val sessionId = pendingNotificationSessionId
+                        pendingNotificationSessionId = null
+                        result.success(sessionId)
                     }
                     else -> result.notImplemented()
                 }
@@ -825,6 +858,50 @@ class MainActivity : AudioServiceActivity() {
 
         scanMediaStore(folderTrimmed, byPath)
         return byPath.values.toList()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        deliverNotificationSessionIntent(intent)
+    }
+
+    override fun onDestroy() {
+        notificationsMethodChannel = null
+        super.onDestroy()
+    }
+
+    private fun capturePendingNotificationSession(intent: Intent?) {
+        pendingNotificationSessionId = extractNotificationSessionId(intent)
+    }
+
+    private fun deliverNotificationSessionIntent(intent: Intent?) {
+        val sessionId = extractNotificationSessionId(intent) ?: return
+        val channel = notificationsMethodChannel
+        if (channel == null) {
+            pendingNotificationSessionId = sessionId
+            return
+        }
+        try {
+            channel.invokeMethod(
+                "openSessionFromNotification",
+                mapOf("sessionId" to sessionId)
+            )
+        } catch (_: Exception) {
+            pendingNotificationSessionId = sessionId
+        }
+    }
+
+    private fun extractNotificationSessionId(intent: Intent?): String? {
+        val action = intent?.action
+        val sessionId = intent
+            ?.getStringExtra(notificationSessionIdExtra)
+            ?.takeIf { it.isNotBlank() }
+            ?: return null
+        if (action == null || action == openSessionFromNotificationAction) {
+            return sessionId
+        }
+        return sessionId
     }
 
     private fun listChildFolders(folder: String): List<String> {

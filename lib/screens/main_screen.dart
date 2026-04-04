@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui';
 
@@ -42,6 +43,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   bool _notificationPermissionCheckQueued = false;
   bool _notificationSettingsDialogVisible = false;
   bool _notificationSettingsOpened = false;
+  Timer? _notificationSessionNavigationTimer;
+  String? _pendingNotificationSessionId;
+  String? _lastOpenedNotificationSessionId;
+  DateTime? _lastOpenedNotificationAt;
 
   final List<Widget> _pages = const [
     LibraryTab(),
@@ -71,26 +76,38 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _notificationsChannel.setMethodCallHandler(_handleNotificationsChannelCall);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_consumePendingNotificationSession());
+    });
   }
 
   @override
   void dispose() {
+    _notificationSessionNavigationTimer?.cancel();
+    _notificationsChannel.setMethodCallHandler(null);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state != AppLifecycleState.resumed || !_notificationSettingsOpened) {
+    if (state != AppLifecycleState.resumed) {
+      return;
+    }
+    unawaited(_consumePendingNotificationSession());
+    if (!_notificationSettingsOpened) {
       return;
     }
     _notificationSettingsOpened = false;
     _handleNotificationSettingsReturn();
   }
 
-  void _switchPage(int index) {
+  void _switchPage(int index, {bool withFeedback = true}) {
     if (index == _currentIndex) return;
-    Feedback.forTap(context);
+    if (withFeedback) {
+      Feedback.forTap(context);
+    }
     _transitionDirection = index > _currentIndex ? 1 : -1;
     final token = ++_transitionToken;
     setState(() {
@@ -243,6 +260,75 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     if (!mounted || !enabled) return;
     audioProvider.refreshNotificationState();
     _showNotificationPermissionEnabledSnack();
+  }
+
+  Future<dynamic> _handleNotificationsChannelCall(MethodCall call) async {
+    switch (call.method) {
+      case 'openSessionFromNotification':
+        final args = call.arguments;
+        String? sessionId;
+        if (args is Map) {
+          sessionId = args['sessionId'] as String?;
+        } else if (args is String) {
+          sessionId = args;
+        }
+        if (sessionId != null && sessionId.isNotEmpty) {
+          _queueNotificationSessionNavigation(sessionId);
+        }
+        return null;
+      default:
+        return null;
+    }
+  }
+
+  Future<void> _consumePendingNotificationSession() async {
+    if (!Platform.isAndroid || !mounted) return;
+    try {
+      final sessionId = await _notificationsChannel.invokeMethod<String>(
+        'consumePendingNotificationSessionId',
+      );
+      if (!mounted || sessionId == null || sessionId.isEmpty) {
+        return;
+      }
+      _queueNotificationSessionNavigation(sessionId);
+    } catch (_) {}
+  }
+
+  void _queueNotificationSessionNavigation(String sessionId) {
+    final now = DateTime.now();
+    if (_lastOpenedNotificationSessionId == sessionId &&
+        _lastOpenedNotificationAt != null &&
+        now.difference(_lastOpenedNotificationAt!) <
+            const Duration(milliseconds: 800)) {
+      return;
+    }
+    _pendingNotificationSessionId = sessionId;
+    _notificationSessionNavigationTimer?.cancel();
+    _notificationSessionNavigationTimer = Timer(
+      const Duration(milliseconds: 60),
+      _openPendingNotificationSession,
+    );
+  }
+
+  void _openPendingNotificationSession() {
+    if (!mounted) return;
+    final sessionId = _pendingNotificationSessionId;
+    if (sessionId == null || sessionId.isEmpty) return;
+    final provider = context.read<AudioProvider>();
+    if (provider.sessionById(sessionId) == null) {
+      _notificationSessionNavigationTimer?.cancel();
+      _notificationSessionNavigationTimer = Timer(
+        const Duration(milliseconds: 240),
+        _openPendingNotificationSession,
+      );
+      return;
+    }
+
+    _pendingNotificationSessionId = null;
+    _lastOpenedNotificationSessionId = sessionId;
+    _lastOpenedNotificationAt = DateTime.now();
+    _switchPage(1, withFeedback: false);
+    Navigator.of(context).push(buildSessionDetailRoute(sessionId: sessionId));
   }
 
   Widget _buildAnimatedBody({required bool isDesktop}) {

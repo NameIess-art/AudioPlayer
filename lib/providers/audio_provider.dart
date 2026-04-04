@@ -334,6 +334,7 @@ class AudioProvider with ChangeNotifier {
   Timer? _saveSessionStateTimer;
   Timer? _saveSessionOrderTimer;
   Future<void> _sessionPreparationQueue = Future<void>.value();
+  Timer? _notificationActionRefreshTimer;
 
   // Tracks paused when the timer expired (for auto-resume)
   final List<String> _pausedByTimerPaths = [];
@@ -417,6 +418,7 @@ class AudioProvider with ChangeNotifier {
     _saveSessionStateTimer?.cancel();
     _saveSessionOrderTimer?.cancel();
     _notificationProgressRefreshTimer?.cancel();
+    _notificationActionRefreshTimer?.cancel();
     unawaited(
       _setKeepCpuAwake(false, hasActivePlayback: false, hasActiveTimer: false),
     );
@@ -498,78 +500,143 @@ class AudioProvider with ChangeNotifier {
 
   Future<void> playPrimarySessionFromNotification() async {
     final session = _resolveNotificationSession();
-    if (session == null) return;
+    if (session == null) {
+      _scheduleNotificationActionRefresh();
+      return;
+    }
     await _resumeNotificationSession(session);
+    _scheduleNotificationActionRefresh();
   }
 
   Future<void> playNotificationSessionById(String mediaId) async {
     final session = _resolveNotificationSession(mediaId);
-    if (session == null) return;
+    if (session == null) {
+      _scheduleNotificationActionRefresh();
+      return;
+    }
     await _resumeNotificationSession(session);
+    _scheduleNotificationActionRefresh();
   }
 
   Future<void> pausePrimarySessionFromNotification() async {
-    final session = _notificationFocusedSession;
-    if (session == null || !session.state.playing) return;
+    final session = _notificationActionSession;
+    if (session == null || !session.state.playing) {
+      _scheduleNotificationActionRefresh();
+      return;
+    }
+    _notificationFocusSessionId = session.id;
     await session.player.pause();
+    _scheduleNotificationActionRefresh();
   }
 
   Future<void> togglePrimarySessionPlayPauseFromNotification() async {
     final session = _resolveNotificationSession();
-    if (session == null || session.isLoading) return;
+    if (session == null || session.isLoading) {
+      _scheduleNotificationActionRefresh();
+      return;
+    }
     if (session.state.playing) {
       await session.player.pause();
+      _scheduleNotificationActionRefresh();
       return;
     }
     await _resumeNotificationSession(session);
+    _scheduleNotificationActionRefresh();
   }
 
   Future<void> stopPrimarySessionFromNotification() async {
-    final session = _notificationFocusedSession;
-    if (session == null) return;
+    final session = _notificationActionSession;
+    if (session == null) {
+      _scheduleNotificationActionRefresh();
+      return;
+    }
+    _notificationFocusSessionId = session.id;
     await session.player.pause();
+    _scheduleNotificationActionRefresh();
   }
 
   Future<void> skipPrimarySessionToNextFromNotification() async {
-    final session = _notificationFocusedSession;
-    if (session == null) return;
+    final session = _notificationActionSession;
+    if (session == null) {
+      _scheduleNotificationActionRefresh();
+      return;
+    }
+    _notificationFocusSessionId = session.id;
     await seekSessionToNext(session.id);
+    _scheduleNotificationActionRefresh();
   }
 
   Future<void> skipPrimarySessionToPreviousFromNotification() async {
-    final session = _notificationFocusedSession;
-    if (session == null) return;
+    final session = _notificationActionSession;
+    if (session == null) {
+      _scheduleNotificationActionRefresh();
+      return;
+    }
+    _notificationFocusSessionId = session.id;
     await seekSessionToPrev(session.id);
+    _scheduleNotificationActionRefresh();
   }
 
   Future<void> toggleSessionPlaybackFromNotification(String sessionId) async {
     final session = _sessions[sessionId];
-    if (session == null) return;
+    if (session == null) {
+      _scheduleNotificationActionRefresh();
+      return;
+    }
+    _notificationFocusSessionId = session.id;
     await toggleSessionPlayPause(session.id);
+    _scheduleNotificationActionRefresh();
   }
 
   Future<void> skipNotificationSessionToPreviousById(String sessionId) async {
     final session = _sessions[sessionId];
-    if (session == null) return;
+    if (session == null) {
+      _scheduleNotificationActionRefresh();
+      return;
+    }
+    _notificationFocusSessionId = session.id;
     await seekSessionToPrev(session.id);
+    _scheduleNotificationActionRefresh();
   }
 
   Future<void> skipNotificationSessionToNextById(String sessionId) async {
     final session = _sessions[sessionId];
-    if (session == null) return;
+    if (session == null) {
+      _scheduleNotificationActionRefresh();
+      return;
+    }
+    _notificationFocusSessionId = session.id;
     await seekSessionToNext(session.id);
+    _scheduleNotificationActionRefresh();
   }
 
   Future<void> seekPrimarySessionFromNotification(Duration position) async {
-    final session = _notificationFocusedSession;
-    if (session == null) return;
+    final session = _notificationActionSession;
+    if (session == null) {
+      _scheduleNotificationActionRefresh();
+      return;
+    }
+    _notificationFocusSessionId = session.id;
     await seekSession(session.id, position);
+    _scheduleNotificationActionRefresh();
   }
 
   List<PlaybackSession> get _singleThreadNotificationSessions {
-    return activeSessions
+    final sessions = activeSessions;
+    if (sessions.isEmpty) {
+      return const <PlaybackSession>[];
+    }
+    final visibleSessions = sessions
         .where((session) => session.state.playing || session.isLoading)
         .toList(growable: false);
+    if (visibleSessions.isNotEmpty) {
+      return visibleSessions;
+    }
+    final retainedSession = _focusedSessionFrom(sessions);
+    if (retainedSession == null) {
+      return const <PlaybackSession>[];
+    }
+    return <PlaybackSession>[retainedSession];
   }
 
   List<PlaybackSession> get _notificationQueueSessions {
@@ -578,17 +645,28 @@ class AudioProvider with ChangeNotifier {
         : _singleThreadNotificationSessions;
   }
 
-  PlaybackSession? get _notificationFocusedSession {
-    final queueSessions = _notificationQueueSessions;
+  PlaybackSession? _focusedSessionFrom(Iterable<PlaybackSession> sessions) {
     final focusedId = _notificationFocusSessionId;
     if (focusedId != null) {
-      for (final session in queueSessions) {
+      for (final session in sessions) {
         if (session.id == focusedId) return session;
       }
     }
-    final fallback = queueSessions.isNotEmpty ? queueSessions.first : null;
+    final fallback = sessions.isNotEmpty ? sessions.first : null;
     _notificationFocusSessionId = fallback?.id;
     return fallback;
+  }
+
+  PlaybackSession? get _notificationFocusedSession {
+    return _focusedSessionFrom(_notificationQueueSessions);
+  }
+
+  PlaybackSession? get _notificationActionSession {
+    final focused = _focusedSessionFrom(activeSessions);
+    if (focused != null) {
+      return focused;
+    }
+    return _focusedSessionFrom(_notificationQueueSessions);
   }
 
   PlaybackSession? _resolveNotificationSession([String? sessionId]) {
@@ -599,11 +677,25 @@ class AudioProvider with ChangeNotifier {
         return matchedSession;
       }
     }
-    final focusedSession = _notificationFocusedSession;
+    final focusedSession = _notificationActionSession;
     if (focusedSession != null) {
       _notificationFocusSessionId = focusedSession.id;
     }
     return focusedSession;
+  }
+
+  void _scheduleNotificationActionRefresh() {
+    _syncNotificationState();
+    notifyListeners();
+    _notificationActionRefreshTimer?.cancel();
+    _notificationActionRefreshTimer = Timer(
+      const Duration(milliseconds: 220),
+      () {
+        _notificationActionRefreshTimer = null;
+        _syncNotificationState();
+        notifyListeners();
+      },
+    );
   }
 
   Future<void> _resumeNotificationSession(PlaybackSession session) async {
