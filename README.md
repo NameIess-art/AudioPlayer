@@ -1,36 +1,36 @@
-# AudioPlayer
+﻿# AudioPlayer
 
-`AudioPlayer` is a Flutter-based local audio player focused on Android. It is built for personal libraries with multi-session playback, grouped playback notifications, recursive cover-art discovery, sleep timer workflows, and video-to-audio conversion.
+`AudioPlayer` 是一款基于 Flutter 开发、面向 Android 的本地音频播放器，主要服务于个人音频库场景，支持多会话播放、通知栏分组控制、封面递归发现、睡眠计时器，以及视频转音频等能力。
 
-## Highlights
+## 功能亮点
 
-- Local library management for folders and individual files
-- Multi-session parallel playback with independent controls
-- Android playback notifications with grouped summary and per-session child notifications
-- Recursive cover-art discovery for library folders, playlists, and `content://` sources
-- Playlist controls including play/pause, previous/next, seek, volume, and session close
-- Loop and playback strategies including single-track loop, shuffle, folder loop, and cross-folder playback
-- Sleep timer with manual start and playback-triggered start modes
-- Video-to-audio conversion powered by `ffmpeg_kit_flutter_new_audio`
-- Theme switching, temporary cache cleanup, and settings management
+- 支持按文件夹或单文件导入本地音频库
+- 支持多会话并行播放，每个会话可独立控制
+- Android 通知栏支持分组摘要通知和子会话通知
+- 支持递归发现音频库文件夹、播放列表和 `content://` 来源中的封面图
+- 播放列表支持播放、暂停、上一首、下一首、拖动进度、调节音量和关闭会话
+- 支持单曲循环、随机播放、文件夹循环、跨文件夹播放等播放策略
+- 支持睡眠计时器，并提供手动启动和播放触发启动两种模式
+- 基于 `ffmpeg_kit_flutter_new_audio` 支持视频转音频
+- 支持主题切换、临时缓存清理和常用设置管理
 
-## Current Release
+## 当前版本
 
-- Version: `1.0.3+4`
-- GitHub Release: [v1.0.3](https://github.com/NameIess-art/AudioPlayer/releases/tag/v1.0.3)
-- Android APK: [AudioPlayer-v1.0.3-release.apk](https://github.com/NameIess-art/AudioPlayer/releases/download/v1.0.3/AudioPlayer-v1.0.3-release.apk)
+- 版本号：`1.0.4+5`
+- GitHub Release：[v1.0.4](https://github.com/NameIess-art/AudioPlayer/releases/tag/v1.0.4)
+- Android APK：[AudioPlayer-v1.0.4-arm64.apk](https://github.com/NameIess-art/AudioPlayer/releases/download/v1.0.4/AudioPlayer-v1.0.4-arm64.apk)
 
-## Tech Stack
+## 技术栈
 
 - Flutter `3.41.x`
 - Dart `3.11.x`
 - `just_audio`
-- `audio_service` with a local patched copy under `third_party/audio_service`
+- `audio_service`，并在 `third_party/audio_service` 下维护了本地定制版本
 - `provider`
 - `shared_preferences`
 - `ffmpeg_kit_flutter_new_audio`
 
-## Project Structure
+## 项目结构
 
 ```text
 lib/
@@ -50,50 +50,50 @@ third_party/
   audio_service/
 ```
 
-## Getting Started
+## 快速开始
 
 ```bash
 flutter pub get
 flutter run
 ```
 
-To run on a specific device:
+如果要在指定设备上运行：
 
 ```bash
 flutter devices
 flutter run -d <device-id>
 ```
 
-## Build
+## 构建
 
-Debug APK:
+调试包：
 
 ```bash
 flutter build apk --debug
 ```
 
-Release APK:
+发布包：
 
 ```bash
 flutter build apk --release
 ```
 
-Build output:
+构建产物默认输出到：
 
 ```text
 build/app/outputs/flutter-apk/app-release.apk
 ```
 
-## Main Screens
+## 主要页面
 
-- `Library`: browse imported local audio groups and discovered cover art
-- `Playlist`: manage active playback sessions and per-session controls
-- `Timer`: configure sleep timer behavior
-- `Video Converter`: extract audio from video files
-- `Settings`: theme, cache, permissions, and related preferences
+- `音频库`：浏览已导入的本地音频分组和识别到的封面
+- `播放列表`：管理当前活动播放会话及其控制项
+- `计时器`：配置睡眠计时器行为
+- `视频转换`：从视频中提取音频
+- `设置`：管理主题、缓存、权限和相关偏好项
 
-## Notes
+## 说明
 
-- This project is currently verified primarily on Android.
-- The repository includes a local `audio_service` override because notification behavior and Android playback handling have been customized.
-- If video conversion fails, first check source file readability, storage permission state, and output directory write access.
+- 当前项目主要在 Android 平台上进行验证和使用。
+- 仓库中包含了本地覆盖的 `audio_service`，因为通知栏行为和 Android 播放链路做了定制化修改。
+- 如果视频转换失败，建议优先检查源文件是否可读、存储权限是否正常，以及输出目录是否可写。
