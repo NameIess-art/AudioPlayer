@@ -173,10 +173,11 @@ class _SessionsEmptyState extends StatelessWidget {
   Widget build(BuildContext context) {
     final i18n = context.watch<AppLanguageProvider>();
     final cs = Theme.of(context).colorScheme;
-    return Center(
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(24, 0, 24, bottomInset),
-        child: Card(
+    return ListView(
+      padding: EdgeInsets.fromLTRB(24, 16, 24, bottomInset),
+      physics: const BouncingScrollPhysics(),
+      children: [
+        Card(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(18, 20, 18, 18),
             child: Column(
@@ -214,7 +215,7 @@ class _SessionsEmptyState extends StatelessWidget {
             ),
           ),
         ),
-      ),
+      ],
     );
   }
 }

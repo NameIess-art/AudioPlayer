@@ -32,6 +32,8 @@ class _TimerTabState extends State<TimerTab> {
   int _seconds = 0;
   TimerMode _selectedMode = TimerMode.manual;
   bool _showCompactDetail = false;
+  bool _draftInitialized = false;
+  String? _lastSyncedDraftKey;
 
   @override
   void initState() {
@@ -43,6 +45,41 @@ class _TimerTabState extends State<TimerTab> {
       Duration(hours: _hours, minutes: _minutes, seconds: _seconds);
 
   bool get _durationIsZero => _pickedDuration == Duration.zero;
+
+  String _draftKey(TimerMode mode, Duration duration) =>
+      '${mode.index}:${duration.inSeconds}';
+
+  void _syncDraftFromProvider(AudioProvider provider) {
+    final duration =
+        provider.timerDuration ??
+        provider.timerRemaining ??
+        provider.timerDraftDuration;
+    final mode = provider.timerMode ?? provider.timerDraftMode;
+    final key = _draftKey(mode, duration);
+    if (_draftInitialized && _lastSyncedDraftKey == key) {
+      return;
+    }
+    _draftInitialized = true;
+    _lastSyncedDraftKey = key;
+    final nextHours = duration.inHours;
+    final nextMinutes = duration.inMinutes.remainder(60);
+    final nextSeconds = duration.inSeconds.remainder(60);
+    if (_hours == nextHours &&
+        _minutes == nextMinutes &&
+        _seconds == nextSeconds &&
+        _selectedMode == mode) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      setState(() {
+        _hours = nextHours;
+        _minutes = nextMinutes;
+        _seconds = nextSeconds;
+        _selectedMode = mode;
+      });
+    });
+  }
 
   String _fmtClockTime(int h, int m) =>
       '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}';
@@ -81,6 +118,7 @@ class _TimerTabState extends State<TimerTab> {
   Widget build(BuildContext context) {
     final i18n = context.watch<AppLanguageProvider>();
     final provider = context.watch<AudioProvider>();
+    _syncDraftFromProvider(provider);
     final cs = Theme.of(context).colorScheme;
     final timerConfigured = provider.timerDuration != null;
     final timerActive = provider.timerActive;
@@ -154,6 +192,8 @@ class _TimerTabState extends State<TimerTab> {
                 _hours = h;
                 _minutes = m;
                 _seconds = s;
+                _lastSyncedDraftKey = _draftKey(_selectedMode, _pickedDuration);
+                provider.setTimerDraft(_selectedMode, _pickedDuration);
               }),
             ),
             SizedBox(height: compactMode ? 12 : 18),
@@ -170,7 +210,11 @@ class _TimerTabState extends State<TimerTab> {
               compact: compactMode,
               onChanged: (mode) {
                 HapticFeedback.selectionClick();
-                setState(() => _selectedMode = mode);
+                setState(() {
+                  _selectedMode = mode;
+                  _lastSyncedDraftKey = _draftKey(mode, _pickedDuration);
+                });
+                provider.setTimerDraft(mode, _pickedDuration);
               },
             ),
             if (compactMode) const Spacer(),

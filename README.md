@@ -16,9 +16,9 @@
 
 ## 当前版本
 
-- 版本号：`1.0.4+5`
-- GitHub Release：[v1.0.4](https://github.com/NameIess-art/AudioPlayer/releases/tag/v1.0.4)
-- Android APK：[AudioPlayer-v1.0.4-arm64.apk](https://github.com/NameIess-art/AudioPlayer/releases/download/v1.0.4/AudioPlayer-v1.0.4-arm64.apk)
+- 版本号：`1.0.5+6`
+- GitHub Release：[v1.0.5](https://github.com/NameIess-art/AudioPlayer/releases/tag/v1.0.5)
+- Android APK：[AudioPlayer-v1.0.5-arm64.apk](https://github.com/NameIess-art/AudioPlayer/releases/download/v1.0.5/AudioPlayer-v1.0.5-arm64.apk)
 
 ## 技术栈
 

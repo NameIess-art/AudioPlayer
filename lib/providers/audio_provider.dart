@@ -228,6 +228,7 @@ const _kSessionsKey = 'active_sessions_v1';
 const _kGroupOrderKey = 'group_order_v1';
 const _kSessionOrderKey = 'session_order_v1';
 const _kWatchedFoldersKey = 'watched_folders_v1';
+const _kWatchedLibrariesKey = 'watched_libraries_v1';
 const _kTimerSettingsKey = 'timer_settings_v1';
 const _kTimerRuntimeKey = 'timer_runtime_v1';
 const _kConverterSettingsKey = 'converter_settings_v1';
@@ -283,6 +284,7 @@ class AudioProvider with ChangeNotifier {
   final List<String> _sessionOrder = [];
   // Paths of folder roots selected by the user (watched for auto-rescan)
   final List<String> _watchedFolders = [];
+  final List<String> _watchedLibraries = [];
 
   // Video conversion settings (configured from Settings tab).
   String _converterFormat = 'mp3';
@@ -322,6 +324,8 @@ class AudioProvider with ChangeNotifier {
   DateTime? _timerEndsAt;
   Timer? _countdownTimer;
   bool _timerWaitingForPlayback = false;
+  TimerMode _timerDraftMode = TimerMode.manual;
+  Duration _timerDraftDuration = const Duration(minutes: 30);
   int _timerGeneration = 0;
   bool _keepCpuAwake = false;
   bool _keepAliveHasPlayback = false;
@@ -349,6 +353,8 @@ class AudioProvider with ChangeNotifier {
   // Getters
   TimerMode? get timerMode => _timerMode;
   Duration? get timerDuration => _timerDuration;
+  TimerMode get timerDraftMode => _timerDraftMode;
+  Duration get timerDraftDuration => _timerDraftDuration;
   bool get timerActive => _timerActive;
   Duration? get timerRemaining => _timerRemaining;
   bool get autoResumeEnabled => _autoResumeEnabled;
@@ -362,6 +368,7 @@ class AudioProvider with ChangeNotifier {
   List<MusicTrack> get library => List.unmodifiable(_library);
   int get libraryTrackCount => _library.length;
   List<String> get watchedFolders => List.unmodifiable(_watchedFolders);
+  List<String> get watchedLibraries => List.unmodifiable(_watchedLibraries);
   int get watchedFolderCount => _watchedFolders.length;
   List<LibraryNode> get libraryTree {
     if (_libraryTreeDirty) {
@@ -1263,6 +1270,7 @@ class AudioProvider with ChangeNotifier {
     _markLibraryStructureDirty();
     await _loadSessionOrder();
     await _loadWatchedFolders();
+    await _loadWatchedLibraries();
     await _loadPlaybackSettings();
     await _loadConverterSettings();
     await _loadTimerSettings();
@@ -1442,6 +1450,27 @@ class AudioProvider with ChangeNotifier {
     } catch (_) {}
   }
 
+  Future<void> _loadWatchedLibraries() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_kWatchedLibrariesKey);
+      if (raw == null || raw.isEmpty) return;
+      final list = (json.decode(raw) as List<dynamic>).cast<String>();
+      _watchedLibraries.clear();
+      _watchedLibraries.addAll(list);
+    } catch (_) {}
+  }
+
+  Future<void> _saveWatchedLibraries() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        _kWatchedLibrariesKey,
+        json.encode(_watchedLibraries),
+      );
+    } catch (_) {}
+  }
+
   // ---------------------------------------------------------------------------
   // Timer Settings persistence
   // ---------------------------------------------------------------------------
@@ -1455,6 +1484,16 @@ class AudioProvider with ChangeNotifier {
       _autoResumeEnabled = map['autoResumeEnabled'] as bool? ?? false;
       _autoResumeHour = map['autoResumeHour'] as int? ?? 7;
       _autoResumeMinute = map['autoResumeMinute'] as int? ?? 0;
+      final draftModeIndex = map['timerDraftMode'] as int?;
+      final draftDurationMs = map['timerDraftDurationMs'] as int?;
+      if (draftModeIndex != null &&
+          draftModeIndex >= 0 &&
+          draftModeIndex < TimerMode.values.length) {
+        _timerDraftMode = TimerMode.values[draftModeIndex];
+      }
+      if (draftDurationMs != null && draftDurationMs > 0) {
+        _timerDraftDuration = Duration(milliseconds: draftDurationMs);
+      }
     } catch (_) {}
   }
 
@@ -1465,9 +1504,24 @@ class AudioProvider with ChangeNotifier {
         'autoResumeEnabled': _autoResumeEnabled,
         'autoResumeHour': _autoResumeHour,
         'autoResumeMinute': _autoResumeMinute,
+        'timerDraftMode': _timerDraftMode.index,
+        'timerDraftDurationMs': _timerDraftDuration.inMilliseconds,
       });
       await prefs.setString(_kTimerSettingsKey, encoded);
     } catch (_) {}
+  }
+
+  void setTimerDraft(TimerMode mode, Duration duration) {
+    final normalizedDuration = duration > Duration.zero
+        ? duration
+        : const Duration(minutes: 30);
+    if (_timerDraftMode == mode && _timerDraftDuration == normalizedDuration) {
+      return;
+    }
+    _timerDraftMode = mode;
+    _timerDraftDuration = normalizedDuration;
+    notifyListeners();
+    unawaited(_saveTimerSettings());
   }
 
   Future<void> _loadTimerRuntime() async {
@@ -1651,12 +1705,31 @@ class AudioProvider with ChangeNotifier {
     }
   }
 
+  void addWatchedLibrary(String folderPath, {bool notify = true}) {
+    if (!_watchedLibraries.contains(folderPath)) {
+      _watchedLibraries.add(folderPath);
+      unawaited(_saveWatchedLibraries());
+      if (notify) {
+        notifyListeners();
+      }
+    }
+  }
+
   /// Stop watching [folderPath].
   void removeWatchedFolder(String folderPath, {bool notify = true}) {
     if (_watchedFolders.remove(folderPath)) {
       _clearResolvedCoverPaths();
       _markLibraryStructureDirty();
       unawaited(_saveWatchedFolders());
+      if (notify) {
+        notifyListeners();
+      }
+    }
+  }
+
+  void removeWatchedLibrary(String folderPath, {bool notify = true}) {
+    if (_watchedLibraries.remove(folderPath)) {
+      unawaited(_saveWatchedLibraries());
       if (notify) {
         notifyListeners();
       }
@@ -2566,6 +2639,10 @@ class AudioProvider with ChangeNotifier {
   /// (for manual mode the user taps "start"; for trigger mode the countdown
   /// starts automatically when any audio begins playing).
   void configureTimer(TimerMode mode, Duration duration) {
+    _timerDraftMode = mode;
+    _timerDraftDuration = duration > Duration.zero
+        ? duration
+        : const Duration(minutes: 30);
     _cancelTimerInternal();
     _timerMode = mode;
     _timerDuration = duration;
@@ -2579,6 +2656,7 @@ class AudioProvider with ChangeNotifier {
     }
     _syncKeepCpuAwake();
     notifyListeners();
+    unawaited(_saveTimerSettings());
     unawaited(_saveTimerRuntime());
   }
 

@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mime/mime.dart';
 import 'package:path/path.dart' as path;
+import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 
@@ -50,7 +51,8 @@ class _LibraryTabState extends State<LibraryTab> {
     final i18n = context.read<AppLanguageProvider>();
     final provider = context.read<AudioProvider>();
     final watchedFolders = provider.watchedFolders;
-    if (watchedFolders.isEmpty) return;
+    final watchedLibraries = provider.watchedLibraries;
+    if (watchedFolders.isEmpty && watchedLibraries.isEmpty) return;
 
     final permissionGranted = await _ensureReadPermission();
     if (!permissionGranted) {
@@ -62,7 +64,16 @@ class _LibraryTabState extends State<LibraryTab> {
     provider.setScanning(true);
     var totalAdded = 0;
     try {
-      for (final folderPath in watchedFolders) {
+      final foldersToRefresh = LinkedHashSet<String>.from(watchedFolders);
+      for (final libraryRoot in watchedLibraries) {
+        final childFolders = await _listImmediateChildFolders(libraryRoot);
+        for (final childFolder in childFolders) {
+          foldersToRefresh.add(childFolder);
+          provider.addWatchedFolder(childFolder, notify: false);
+        }
+      }
+
+      for (final folderPath in foldersToRefresh) {
         final nativeTracks = await _scanFolderViaNative(folderPath);
         if (nativeTracks != null) {
           final toAdd = nativeTracks
@@ -133,6 +144,9 @@ class _LibraryTabState extends State<LibraryTab> {
       return;
     }
 
+    if (mounted) {
+      context.read<AudioProvider>().addWatchedLibrary(folderPath, notify: false);
+    }
     await _addFoldersFromPaths(
       childFolders,
       completionMessageBuilder: (trackCount, folderCount) {
@@ -313,9 +327,7 @@ class _LibraryTabState extends State<LibraryTab> {
 
     if (stream != null) {
       try {
-        final cacheDir = Directory(
-          path.join(Directory.systemTemp.path, 'music_player_imports'),
-        );
+        final cacheDir = await _persistentImportDirectory();
         if (!await cacheDir.exists()) await cacheDir.create(recursive: true);
 
         final extension = path.extension(file.name);
@@ -343,6 +355,11 @@ class _LibraryTabState extends State<LibraryTab> {
       } catch (_) {}
     }
     return null;
+  }
+
+  Future<Directory> _persistentImportDirectory() async {
+    final supportDir = await getApplicationSupportDirectory();
+    return Directory(path.join(supportDir.path, 'music_player_imports'));
   }
 
   Future<List<_ScannedTrack>?> _scanFolderViaNative(String folderPath) async {
@@ -644,6 +661,7 @@ class _LibraryTabState extends State<LibraryTab> {
           Expanded(
             child: tree.isEmpty
                 ? _LibraryEmptyState(
+                    onImportLibrary: _addLibrary,
                     onImportFolder: _addFolder,
                     onImportFile: _addFiles,
                     bottomInset: bottomInset,
@@ -680,11 +698,13 @@ void _showSessionCreatedSnack(BuildContext context, String message) {
 
 class _LibraryEmptyState extends StatelessWidget {
   const _LibraryEmptyState({
+    required this.onImportLibrary,
     required this.onImportFolder,
     required this.onImportFile,
     required this.bottomInset,
   });
 
+  final VoidCallback onImportLibrary;
   final VoidCallback onImportFolder;
   final VoidCallback onImportFile;
   final double bottomInset;
@@ -693,10 +713,11 @@ class _LibraryEmptyState extends StatelessWidget {
   Widget build(BuildContext context) {
     final i18n = context.watch<AppLanguageProvider>();
     final cs = Theme.of(context).colorScheme;
-    return Center(
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(24, 0, 24, bottomInset),
-        child: Card(
+    return ListView(
+      padding: EdgeInsets.fromLTRB(24, 16, 24, bottomInset),
+      physics: const BouncingScrollPhysics(),
+      children: [
+        Card(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(18, 20, 18, 18),
             child: Column(
@@ -737,6 +758,11 @@ class _LibraryEmptyState extends StatelessWidget {
                   alignment: WrapAlignment.center,
                   children: [
                     FilledButton.icon(
+                      onPressed: onImportLibrary,
+                      icon: const Icon(Icons.library_add_rounded),
+                      label: Text(i18n.tr('import_library')),
+                    ),
+                    FilledButton.icon(
                       onPressed: onImportFolder,
                       icon: const Icon(Icons.create_new_folder_rounded),
                       label: Text(i18n.tr('import_folder')),
@@ -752,7 +778,7 @@ class _LibraryEmptyState extends StatelessWidget {
             ),
           ),
         ),
-      ),
+      ],
     );
   }
 }

@@ -22,6 +22,7 @@ import android.util.LruCache
 import android.webkit.MimeTypeMap
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
 import androidx.media.app.NotificationCompat.MediaStyle
 import com.ryanheise.audioservice.AudioServiceActivity
@@ -525,7 +526,7 @@ class MainActivity : AudioServiceActivity() {
                             val extension = name.substringAfterLast('.', "")
                             val safeExt = if (extension.isBlank()) "bin" else extension
 
-                            val outDir = File(cacheDir, "music_player_imports")
+                            val outDir = File(filesDir, "music_player_imports")
                             if (!outDir.exists()) {
                                 outDir.mkdirs()
                             }
@@ -761,6 +762,29 @@ class MainActivity : AudioServiceActivity() {
         hasActivePlayback: Boolean,
         hasActiveTimer: Boolean
     ) {
+        try {
+            if (enabled && hasActivePlayback) {
+                val serviceIntent =
+                    Intent(applicationContext, PlaybackKeepAliveService::class.java).apply {
+                        action = PlaybackKeepAliveService.ACTION_START
+                        putExtra(
+                            PlaybackKeepAliveService.EXTRA_HAS_ACTIVE_PLAYBACK,
+                            hasActivePlayback
+                        )
+                        putExtra(
+                            PlaybackKeepAliveService.EXTRA_HAS_ACTIVE_TIMER,
+                            hasActiveTimer
+                        )
+                    }
+                ContextCompat.startForegroundService(applicationContext, serviceIntent)
+            } else {
+                applicationContext.stopService(
+                    Intent(applicationContext, PlaybackKeepAliveService::class.java)
+                )
+            }
+        } catch (_: Exception) {
+            // Ignore foreground service sync failures and fall back to a wakelock.
+        }
         try {
             PlaybackWakeLockController.sync(applicationContext, enabled)
         } catch (_: Exception) {

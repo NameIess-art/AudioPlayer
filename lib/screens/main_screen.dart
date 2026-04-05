@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 
 import '../i18n/app_language_provider.dart';
 import '../providers/audio_provider.dart';
+import '../services/app_preferences.dart';
 import 'library_tab.dart';
 import 'playlist_tab.dart';
 import 'settings_tab.dart';
@@ -30,6 +31,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   static const Curve _pageTransitionCurve = Curves.easeInOutCubic;
   static const double _desktopBreakpoint = 980;
   static const Color _appleMusicAccent = Color(0xFFFF2D55);
+  static const String _backgroundKeepAliveInitializedKey =
+      'background_keep_alive_initialized_v1';
+  static const MethodChannel _powerChannel = MethodChannel('music_player/power');
   static const MethodChannel _notificationsChannel = MethodChannel(
     'music_player/notifications',
   );
@@ -79,6 +83,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     _notificationsChannel.setMethodCallHandler(_handleNotificationsChannelCall);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_consumePendingNotificationSession());
+      unawaited(_maybeEnableBackgroundKeepAliveOnFirstLaunch());
     });
   }
 
@@ -152,6 +157,38 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     } catch (_) {
       return true;
     }
+  }
+
+  Future<bool> _isIgnoringBatteryOptimizations() async {
+    if (!Platform.isAndroid) return true;
+    try {
+      return await _powerChannel.invokeMethod<bool>(
+            'isIgnoringBatteryOptimizations',
+          ) ??
+          false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _openBatteryOptimizationSettings() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _powerChannel.invokeMethod<bool>('openBatteryOptimizationSettings');
+    } catch (_) {}
+  }
+
+  Future<void> _maybeEnableBackgroundKeepAliveOnFirstLaunch() async {
+    if (!mounted || !Platform.isAndroid) return;
+    final initialized =
+        await AppPreferences.getBool(_backgroundKeepAliveInitializedKey) ??
+        false;
+    if (initialized) return;
+    await AppPreferences.setBool(_backgroundKeepAliveInitializedKey, true);
+    final ignoringBatteryOptimizations =
+        await _isIgnoringBatteryOptimizations();
+    if (!mounted || ignoringBatteryOptimizations) return;
+    await _openBatteryOptimizationSettings();
   }
 
   Future<void> _openNotificationSettings() async {
