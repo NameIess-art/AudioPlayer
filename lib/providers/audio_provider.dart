@@ -213,6 +213,8 @@ class PlaybackSession {
   /// Monotonically incremented each time we start loading so stale completions
   /// from previous loads do not accidentally trigger auto-advance.
   int loadGeneration = 0;
+  Duration lastKnownPosition = Duration.zero;
+  int lastPersistedPositionBucket = -1;
   List<StreamSubscription> subscriptions = [];
 
   void dispose() {
@@ -276,6 +278,7 @@ class AudioProvider with ChangeNotifier {
   String? _unifiedNotificationSyncKey;
   Timer? _notificationProgressRefreshTimer;
   String? _queuedNotificationRefreshSessionId;
+  bool _notificationsDismissedWhilePaused = false;
 
   // Ordered list of groupKeys (for drag-reorder persistence)
   final List<String> _groupOrder = [];
@@ -426,6 +429,8 @@ class AudioProvider with ChangeNotifier {
     _saveSessionOrderTimer?.cancel();
     _notificationProgressRefreshTimer?.cancel();
     _notificationActionRefreshTimer?.cancel();
+    unawaited(_saveSessionState());
+    unawaited(_saveSessionOrder());
     unawaited(
       _setKeepCpuAwake(false, hasActivePlayback: false, hasActiveTimer: false),
     );
@@ -501,6 +506,7 @@ class AudioProvider with ChangeNotifier {
       onToggleSessionPlayback: toggleSessionPlaybackFromNotification,
       onSkipToPreviousSession: skipNotificationSessionToPreviousById,
       onSkipToNextSession: skipNotificationSessionToNextById,
+      onNotificationDeleted: dismissNotificationsAfterPauseAll,
     );
     _syncNotificationState();
   }
@@ -626,6 +632,15 @@ class AudioProvider with ChangeNotifier {
     _notificationFocusSessionId = session.id;
     await seekSession(session.id, position);
     _scheduleNotificationActionRefresh();
+  }
+
+  Future<void> dismissNotificationsAfterPauseAll() async {
+    _notificationsDismissedWhilePaused = true;
+    await pauseAllSessions();
+    await _clearUnifiedPlaybackNotifications();
+    _notificationHandler.updateSnapshot(null);
+    _notificationFocusSessionId = _preferredSingleSessionId;
+    notifyListeners();
   }
 
   List<PlaybackSession> get _singleThreadNotificationSessions {
@@ -1058,7 +1073,25 @@ class AudioProvider with ChangeNotifier {
     _resolvedNotificationCoverPaths.clear();
   }
 
+  Future<void> _clearUnifiedPlaybackNotifications() async {
+    _unifiedNotificationSyncKey = null;
+    try {
+      await _notificationsChannel.invokeMethod<void>(
+        'clearUnifiedPlaybackNotifications',
+      );
+    } on MissingPluginException {
+      // The Android notifications channel is not available on this platform.
+    } catch (e) {
+      debugPrint('AudioProvider._clearUnifiedPlaybackNotifications error: $e');
+    }
+  }
+
   void _syncNotificationState() {
+    if (_notificationsDismissedWhilePaused && !_hasPlaybackToKeepAlive) {
+      _notificationHandler.updateSnapshot(null);
+      unawaited(_clearUnifiedPlaybackNotifications());
+      return;
+    }
     _notificationHandler.updateSnapshot(_buildNotificationSnapshot());
     unawaited(_syncUnifiedPlaybackNotifications());
   }
@@ -1142,9 +1175,7 @@ class AudioProvider with ChangeNotifier {
 
     try {
       if (payload.isEmpty) {
-        await _notificationsChannel.invokeMethod<void>(
-          'clearUnifiedPlaybackNotifications',
-        );
+        await _clearUnifiedPlaybackNotifications();
       } else {
         await _notificationsChannel.invokeMethod<void>(
           'syncUnifiedPlaybackNotifications',
@@ -1303,6 +1334,10 @@ class AudioProvider with ChangeNotifier {
         final loopMode = SessionLoopMode
             .values[loopModeIndex.clamp(0, SessionLoopMode.values.length - 1)];
         final volume = (item['volume'] as num?)?.toDouble() ?? 1.0;
+        final restoredPositionMs = (item['positionMs'] as num?)?.toInt() ?? 0;
+        final restoredPosition = Duration(
+          milliseconds: max(0, restoredPositionMs),
+        );
 
         // Spawn a paused session (avoids blasting audio on startup).
         final player = AudioPlayer(
@@ -1322,6 +1357,8 @@ class AudioProvider with ChangeNotifier {
           createdAt: DateTime.now(),
           state: player.playerState,
         );
+        session.lastKnownPosition = restoredPosition;
+        session.lastPersistedPositionBucket = restoredPosition.inSeconds ~/ 5;
         _sessions[session.id] = session;
         _markActiveSessionsDirty();
         _bindSessionListeners(session);
@@ -1338,10 +1375,14 @@ class AudioProvider with ChangeNotifier {
           await player.setLoopMode(
             loopMode == SessionLoopMode.single ? LoopMode.one : LoopMode.off,
           );
+          if (restoredPosition > Duration.zero) {
+            await player.seek(restoredPosition);
+          }
           session.loadedPath = track.path;
           _ensureSubtitleTrackLoaded(track.path);
           _refreshNotificationSubtitleForSession(
             session,
+            position: restoredPosition,
             syncNotification: false,
           );
         } catch (_) {}
@@ -1385,6 +1426,13 @@ class AudioProvider with ChangeNotifier {
                 'path': s.currentTrackPath,
                 'loopMode': s.loopMode.index,
                 'volume': s.volume,
+                'positionMs': max(
+                  0,
+                  max(
+                    s.player.position.inMilliseconds,
+                    s.lastKnownPosition.inMilliseconds,
+                  ),
+                ),
               },
             )
             .toList(),
@@ -2272,6 +2320,7 @@ class AudioProvider with ChangeNotifier {
 
   void _registerSession(PlaybackSession session) {
     _sessions[session.id] = session;
+    _notificationsDismissedWhilePaused = false;
     _notificationFocusSessionId = session.id;
     _sessionOrder.insert(0, session.id);
     _markActiveSessionsDirty();
@@ -2303,11 +2352,17 @@ class AudioProvider with ChangeNotifier {
     final stateSub = session.player.playerStateStream.listen((state) {
       if (!_sessions.containsKey(session.id)) return;
 
+      final previousPlaying = session.state.playing;
       final previousProcessing = session.state.processingState;
       session.state = state;
       _syncKeepCpuAwake();
       _syncNotificationState();
       notifyListeners();
+
+      if (previousPlaying != state.playing ||
+          previousProcessing != state.processingState) {
+        _scheduleSaveSessionState();
+      }
 
       // Only trigger auto-advance when:
       //  1. The track actually just reached the end (idle after playing),
@@ -2326,6 +2381,12 @@ class AudioProvider with ChangeNotifier {
 
     final positionSub = session.player.positionStream.listen((position) {
       if (!_sessions.containsKey(session.id)) return;
+      session.lastKnownPosition = position;
+      final positionBucket = position.inSeconds ~/ 5;
+      if (positionBucket != session.lastPersistedPositionBucket) {
+        session.lastPersistedPositionBucket = positionBucket;
+        _scheduleSaveSessionState(delay: const Duration(milliseconds: 800));
+      }
       if (_notificationFocusedSession?.id != session.id) return;
       final changed = _refreshNotificationSubtitleForSession(
         session,
@@ -2370,6 +2431,8 @@ class AudioProvider with ChangeNotifier {
 
     try {
       session.currentTrackPath = nextPath;
+      session.lastKnownPosition = Duration.zero;
+      session.lastPersistedPositionBucket = 0;
       _ensureSubtitleTrackLoaded(nextPath);
       _refreshNotificationSubtitleForSession(
         session,
@@ -2402,6 +2465,7 @@ class AudioProvider with ChangeNotifier {
       if (_sessions.containsKey(session.id)) {
         session.isLoading = false;
         _syncNotificationState();
+        _scheduleSaveSessionState();
         notifyListeners();
       }
     }
@@ -2574,6 +2638,8 @@ class AudioProvider with ChangeNotifier {
     final session = _sessions[sessionId];
     if (session != null) {
       await session.player.seek(position);
+      session.lastKnownPosition = position;
+      session.lastPersistedPositionBucket = position.inSeconds ~/ 5;
       _refreshNotificationSubtitleForSession(
         session,
         position: position,
@@ -2608,6 +2674,8 @@ class AudioProvider with ChangeNotifier {
     // If more than 3 s into the track, just restart it.
     if ((session.player.position.inSeconds) > 3) {
       await session.player.seek(Duration.zero);
+      session.lastKnownPosition = Duration.zero;
+      session.lastPersistedPositionBucket = 0;
       _refreshNotificationSubtitleForSession(
         session,
         position: Duration.zero,
@@ -2625,6 +2693,7 @@ class AudioProvider with ChangeNotifier {
   Future<void> pauseAllSessions() async {
     await Future.wait(_sessions.values.map((s) => s.player.pause()));
     _syncKeepCpuAwake();
+    _scheduleSaveSessionState();
   }
 
   Future<void> clearAllSessions() async {
@@ -2929,6 +2998,7 @@ class AudioProvider with ChangeNotifier {
     required bool shouldStartTriggerCountdown,
   }) async {
     if (!_sessions.containsKey(session.id)) return;
+    _notificationsDismissedWhilePaused = false;
     if (!_multiThreadPlaybackEnabled) {
       await _enforceSingleThreadPlayback(preferredSessionId: session.id);
     }

@@ -678,11 +678,14 @@ class SessionDetailPage extends StatefulWidget {
 class _SessionDetailPageState extends State<SessionDetailPage>
     with SingleTickerProviderStateMixin {
   late final AnimationController _dismissController;
+  late String _currentSessionId;
   String? _lastPrecachingCoverKey;
+  double _horizontalDragDelta = 0;
 
   @override
   void initState() {
     super.initState();
+    _currentSessionId = widget.sessionId;
     _dismissController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 220),
@@ -702,7 +705,7 @@ class _SessionDetailPageState extends State<SessionDetailPage>
     final dpr = MediaQuery.devicePixelRatioOf(context);
     final cacheWidth = (mediaSize.width * dpr).round();
     final cacheHeight = (heroHeight * dpr).round();
-    final precacheKey = '${widget.sessionId}:$cacheWidth:$cacheHeight';
+    final precacheKey = '$_currentSessionId:$cacheWidth:$cacheHeight';
     if (_lastPrecachingCoverKey == precacheKey) {
       return;
     }
@@ -745,15 +748,62 @@ class _SessionDetailPageState extends State<SessionDetailPage>
     await _dismissController.animateBack(0, curve: Curves.easeOutCubic);
   }
 
+  void _changeSessionByOffset(AudioProvider provider, int offset) {
+    final sessions = provider.activeSessions;
+    if (sessions.length < 2) return;
+    final currentIndex = sessions.indexWhere(
+      (session) => session.id == _currentSessionId,
+    );
+    if (currentIndex < 0) return;
+    final nextIndex = (currentIndex + offset)
+        .clamp(0, sessions.length - 1)
+        .toInt();
+    if (nextIndex == currentIndex) return;
+    HapticFeedback.selectionClick();
+    setState(() {
+      _currentSessionId = sessions[nextIndex].id;
+      _horizontalDragDelta = 0;
+    });
+  }
+
+  void _handleHorizontalDragEnd(
+    DragEndDetails details,
+    AudioProvider provider,
+  ) {
+    final velocity = details.primaryVelocity ?? 0;
+    final shouldGoPrevious = _horizontalDragDelta > 56 || velocity > 520;
+    final shouldGoNext = _horizontalDragDelta < -56 || velocity < -520;
+    _horizontalDragDelta = 0;
+    if (shouldGoPrevious) {
+      _changeSessionByOffset(provider, -1);
+      return;
+    }
+    if (shouldGoNext) {
+      _changeSessionByOffset(provider, 1);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<AudioProvider>();
     final session = provider.activeSessions.cast<PlaybackSession?>().firstWhere(
-      (candidate) => candidate?.id == widget.sessionId,
+      (candidate) => candidate?.id == _currentSessionId,
       orElse: () => null,
     );
 
     if (session == null) {
+      final fallbackSession = provider.activeSessions.isEmpty
+          ? null
+          : provider.activeSessions.first;
+      if (fallbackSession == null) {
+        return const Scaffold(body: SizedBox.shrink());
+      }
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        setState(() {
+          _currentSessionId = fallbackSession.id;
+        });
+      });
       return const Scaffold(body: SizedBox.shrink());
     }
 
@@ -815,6 +865,14 @@ class _SessionDetailPageState extends State<SessionDetailPage>
         child: RepaintBoundary(
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
+            onHorizontalDragUpdate: (details) {
+              _horizontalDragDelta += details.primaryDelta ?? 0;
+            },
+            onHorizontalDragEnd: (details) =>
+                _handleHorizontalDragEnd(details, provider),
+            onHorizontalDragCancel: () {
+              _horizontalDragDelta = 0;
+            },
             onVerticalDragUpdate: (details) {
               final screenHeight = MediaQuery.sizeOf(context).height;
               if (screenHeight <= 0) return;

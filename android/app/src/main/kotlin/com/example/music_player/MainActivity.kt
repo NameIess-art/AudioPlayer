@@ -214,10 +214,11 @@ private object UnifiedPlaybackNotificationController {
             .setContentText(subtitle)
             .setSubText(null)
             .setContentIntent(buildLaunchIntent(context, sessionId = item.id))
+            .setDeleteIntent(buildDismissIntent(context))
             .setShowWhen(false)
             .setOnlyAlertOnce(true)
             .setSilent(true)
-            .setOngoing(true)
+            .setOngoing(false)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
@@ -276,10 +277,11 @@ private object UnifiedPlaybackNotificationController {
             .setContentTitle("AudioPlayer")
             .setContentText(summaryText ?: "${items.size} sessions")
             .setContentIntent(buildLaunchIntent(context))
+            .setDeleteIntent(buildDismissIntent(context))
             .setShowWhen(false)
             .setOnlyAlertOnce(true)
             .setSilent(true)
-            .setOngoing(true)
+            .setOngoing(false)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
@@ -341,7 +343,8 @@ private object UnifiedPlaybackNotificationController {
         sessionId: String,
         command: NotificationCommand
     ): PendingIntent {
-        val intent = Intent(context, UnifiedPlaybackActionReceiver::class.java).apply {
+        val intent = Intent().apply {
+            setClassName(context, "${context.packageName}.UnifiedPlaybackActionReceiver")
             action = command.actionName
             putExtra("sessionId", sessionId)
         }
@@ -354,6 +357,26 @@ private object UnifiedPlaybackNotificationController {
         )
         val requestCode = notificationIdFor(sessionId) + command.requestCodeOffset
         return PendingIntent.getBroadcast(context, requestCode, intent, flags)
+    }
+
+    private fun buildDismissIntent(context: Context): PendingIntent {
+        val intent = Intent().apply {
+            setClassName(context, "${context.packageName}.UnifiedPlaybackActionReceiver")
+            action = NotificationCommand.dismissAll.actionName
+        }
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or (
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                PendingIntent.FLAG_IMMUTABLE
+            } else {
+                0
+            }
+        )
+        return PendingIntent.getBroadcast(
+            context,
+            summaryNotificationId + NotificationCommand.dismissAll.requestCodeOffset,
+            intent,
+            flags
+        )
     }
 
     private fun loadPersistedNotificationIds(context: Context): Set<Int> {
@@ -402,7 +425,8 @@ private enum class NotificationCommand(
 ) {
     toggle("toggle_session_playback", 1),
     previous("session_skip_previous", 2),
-    next("session_skip_next", 3);
+    next("session_skip_next", 3),
+    dismissAll("dismiss_all_playback_notifications", 9);
 }
 
 class MainActivity : AudioServiceActivity() {
@@ -763,7 +787,7 @@ class MainActivity : AudioServiceActivity() {
         hasActiveTimer: Boolean
     ) {
         try {
-            if (enabled && hasActivePlayback) {
+            if (enabled && hasActiveTimer) {
                 val serviceIntent =
                     Intent(applicationContext, PlaybackKeepAliveService::class.java).apply {
                         action = PlaybackKeepAliveService.ACTION_START

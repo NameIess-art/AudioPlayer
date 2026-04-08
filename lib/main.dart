@@ -32,7 +32,7 @@ Future<void> main() async {
       androidNotificationChannelId: 'com.example.music_player.channel.playback',
       androidNotificationChannelName: 'Playback',
       androidNotificationOngoing: false,
-      androidStopForegroundOnPause: false,
+      androidStopForegroundOnPause: true,
     ),
   );
 

@@ -152,4 +152,19 @@ void main() {
 
     expect(nextSessionId, 'session_next');
   });
+
+  test('notification delete forwards dismiss callback', () async {
+    final handler = PlaybackNotificationHandler();
+    var dismissCount = 0;
+
+    handler.bindCallbacks(
+      onNotificationDeleted: () async {
+        dismissCount++;
+      },
+    );
+
+    await handler.onNotificationDeleted();
+
+    expect(dismissCount, 1);
+  });
 }

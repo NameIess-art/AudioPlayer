@@ -33,7 +33,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   static const Color _appleMusicAccent = Color(0xFFFF2D55);
   static const String _backgroundKeepAliveInitializedKey =
       'background_keep_alive_initialized_v1';
-  static const MethodChannel _powerChannel = MethodChannel('music_player/power');
+  static const MethodChannel _powerChannel = MethodChannel(
+    'music_player/power',
+  );
   static const MethodChannel _notificationsChannel = MethodChannel(
     'music_player/notifications',
   );
@@ -779,13 +781,17 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
             systemNavigationBarContrastEnforced: false,
           );
     final overlaySessions = context
-        .select<AudioProvider, List<PlaybackSession>>(
-          (provider) => provider.multiThreadPlaybackEnabled
-              ? provider.activeSessions.toList(growable: false)
-              : provider.activeSessions
-                    .where((session) => session.state.playing)
-                    .toList(growable: false),
-        );
+        .select<AudioProvider, List<PlaybackSession>>((provider) {
+          final sessions = provider.activeSessions;
+          if (provider.multiThreadPlaybackEnabled || sessions.isEmpty) {
+            return sessions.toList(growable: false);
+          }
+          final retainedSession = sessions.firstWhere(
+            (session) => session.state.playing || session.isLoading,
+            orElse: () => sessions.first,
+          );
+          return <PlaybackSession>[retainedSession];
+        });
     final activeSessionCount = context.select<AudioProvider, int>(
       (provider) => provider.activeSessions.length,
     );

@@ -35,6 +35,8 @@ class PlaybackNotificationHandler extends BaseAudioHandler
   static const String toggleSessionPlaybackAction = 'toggle_session_playback';
   static const String sessionSkipPreviousAction = 'session_skip_previous';
   static const String sessionSkipNextAction = 'session_skip_next';
+  static const String dismissAllNotificationsAction =
+      'dismiss_all_playback_notifications';
   static const String sessionIdExtrasKey = 'sessionId';
 
   Future<void> Function()? _onPlay;
@@ -49,6 +51,7 @@ class PlaybackNotificationHandler extends BaseAudioHandler
   Future<void> Function(String sessionId)? _onToggleSessionPlayback;
   Future<void> Function(String sessionId)? _onSkipToPreviousSession;
   Future<void> Function(String sessionId)? _onSkipToNextSession;
+  Future<void> Function()? _onNotificationDeleted;
 
   void bindCallbacks({
     Future<void> Function()? onPlay,
@@ -63,6 +66,7 @@ class PlaybackNotificationHandler extends BaseAudioHandler
     Future<void> Function(String sessionId)? onToggleSessionPlayback,
     Future<void> Function(String sessionId)? onSkipToPreviousSession,
     Future<void> Function(String sessionId)? onSkipToNextSession,
+    Future<void> Function()? onNotificationDeleted,
   }) {
     _onPlay = onPlay;
     _onPlayFromMediaId = onPlayFromMediaId;
@@ -76,6 +80,7 @@ class PlaybackNotificationHandler extends BaseAudioHandler
     _onToggleSessionPlayback = onToggleSessionPlayback;
     _onSkipToPreviousSession = onSkipToPreviousSession;
     _onSkipToNextSession = onSkipToNextSession;
+    _onNotificationDeleted = onNotificationDeleted;
   }
 
   void updateSnapshot(PlaybackNotificationSnapshot? snapshot) {
@@ -229,8 +234,16 @@ class PlaybackNotificationHandler extends BaseAudioHandler
           await _onSkipToNextSession?.call(sessionId);
         }
         return null;
+      case dismissAllNotificationsAction:
+        await _onNotificationDeleted?.call();
+        return null;
       default:
         return super.customAction(name, extras);
     }
+  }
+
+  @override
+  Future<void> onNotificationDeleted() async {
+    await _onNotificationDeleted?.call();
   }
 }

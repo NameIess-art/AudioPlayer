@@ -65,10 +65,10 @@ class PlaybackKeepAliveService : Service() {
         hasActiveTimer: Boolean
     ): Notification {
         val contentText = when {
-            hasActivePlayback && hasActiveTimer -> "Playback and sleep timer are active."
-            hasActivePlayback -> "Playback is running in the background."
-            hasActiveTimer -> "Sleep timer is running in the background."
-            else -> "Background keep-alive is active."
+            hasActiveTimer && hasActivePlayback -> "Sleep timer is active."
+            hasActiveTimer -> "Sleep timer is active."
+            hasActivePlayback -> "Audio controls are available."
+            else -> "Background tasks are active."
         }
 
         val launchIntent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
@@ -84,7 +84,7 @@ class PlaybackKeepAliveService : Service() {
         }
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("AsmrPlayer")
+            .setContentTitle("AudioPlayer")
             .setContentText(contentText)
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setOngoing(true)
