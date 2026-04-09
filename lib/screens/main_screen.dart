@@ -32,7 +32,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   static const double _desktopBreakpoint = 980;
   static const Color _appleMusicAccent = Color(0xFFFF2D55);
   static const String _backgroundKeepAliveInitializedKey =
-      'background_keep_alive_initialized_v1';
+      'background_keep_alive_initialized_v2';
   static const MethodChannel _powerChannel = MethodChannel(
     'music_player/power',
   );

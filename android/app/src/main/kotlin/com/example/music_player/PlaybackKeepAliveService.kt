@@ -64,11 +64,10 @@ class PlaybackKeepAliveService : Service() {
         hasActivePlayback: Boolean,
         hasActiveTimer: Boolean
     ): Notification {
-        val contentText = when {
-            hasActiveTimer && hasActivePlayback -> "Sleep timer is active."
-            hasActiveTimer -> "Sleep timer is active."
-            hasActivePlayback -> "Audio controls are available."
-            else -> "Background tasks are active."
+        val contentText = if (hasActiveTimer) {
+            "Sleep timer is active."
+        } else {
+            null
         }
 
         val launchIntent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
@@ -85,13 +84,17 @@ class PlaybackKeepAliveService : Service() {
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("AudioPlayer")
-            .setContentText(contentText)
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
+            .setSilent(true)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .apply {
+                if (!contentText.isNullOrBlank()) {
+                    setContentText(contentText)
+                }
                 if (pendingIntent != null) {
                     setContentIntent(pendingIntent)
                 }

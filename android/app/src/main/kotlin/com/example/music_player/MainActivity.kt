@@ -787,7 +787,7 @@ class MainActivity : AudioServiceActivity() {
         hasActiveTimer: Boolean
     ) {
         try {
-            if (enabled && hasActiveTimer) {
+            if (enabled && (hasActivePlayback || hasActiveTimer)) {
                 val serviceIntent =
                     Intent(applicationContext, PlaybackKeepAliveService::class.java).apply {
                         action = PlaybackKeepAliveService.ACTION_START
