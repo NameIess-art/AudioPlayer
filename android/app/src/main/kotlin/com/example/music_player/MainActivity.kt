@@ -110,6 +110,7 @@ private object UnifiedPlaybackNotificationController {
     ) {
         val manager = NotificationManagerCompat.from(context)
         ensureChannel(context)
+        val postedNotificationIds = postedNotificationIds(context)
 
         if (items.isEmpty()) {
             clear(context)
@@ -120,11 +121,22 @@ private object UnifiedPlaybackNotificationController {
             addAll(activeNotificationIds)
             addAll(loadPersistedNotificationIds(context))
         }
+        val protectFromClearAll = items.size > 1
         val nextIds = mutableSetOf<Int>()
         for (item in items) {
             val notificationId = notificationIdFor(item.id)
-            if (activeItemsById[item.id] != item) {
-                manager.notify(notificationId, buildChildNotification(context, item))
+            if (
+                activeItemsById[item.id] != item ||
+                    !postedNotificationIds.contains(notificationId)
+            ) {
+                manager.notify(
+                    notificationId,
+                    buildChildNotification(
+                        context,
+                        item,
+                        protectFromClearAll = protectFromClearAll
+                    )
+                )
             }
             nextIds.add(notificationId)
         }
@@ -141,10 +153,19 @@ private object UnifiedPlaybackNotificationController {
             null
         }
         if (showSummary) {
-            if (summarySignature != lastSummarySignature) {
+            if (
+                summarySignature != lastSummarySignature ||
+                    !postedNotificationIds.contains(summaryNotificationId)
+            ) {
                 manager.notify(
                     summaryNotificationId,
-                    buildSummaryNotification(context, items, summaryText, summaryLines)
+                    buildSummaryNotification(
+                        context,
+                        items,
+                        summaryText,
+                        summaryLines,
+                        protectFromClearAll = protectFromClearAll
+                    )
                 )
             }
         } else {
@@ -176,6 +197,7 @@ private object UnifiedPlaybackNotificationController {
         val previousIds = buildSet {
             addAll(activeNotificationIds)
             addAll(loadPersistedNotificationIds(context))
+            addAll(postedNotificationIds(context))
         }
         previousIds.forEach(manager::cancel)
         manager.cancel(summaryNotificationId)
@@ -205,7 +227,8 @@ private object UnifiedPlaybackNotificationController {
 
     private fun buildChildNotification(
         context: Context,
-        item: UnifiedPlaybackNotificationItem
+        item: UnifiedPlaybackNotificationItem,
+        protectFromClearAll: Boolean
     ): android.app.Notification {
         val subtitle = item.subtitle?.takeIf { it.isNotBlank() }
         val builder = NotificationCompat.Builder(context, channelId)
@@ -263,25 +286,30 @@ private object UnifiedPlaybackNotificationController {
         val mediaStyle = MediaStyle()
             .setShowActionsInCompactView(*compactActionIndices.toIntArray())
         builder.setStyle(mediaStyle)
-        return builder.build()
+        return builder.build().apply {
+            if (protectFromClearAll) {
+                flags = flags or android.app.Notification.FLAG_NO_CLEAR
+            }
+        }
     }
 
     private fun buildSummaryNotification(
         context: Context,
         items: List<UnifiedPlaybackNotificationItem>,
         summaryText: String?,
-        summaryLines: List<String>
+        summaryLines: List<String>,
+        protectFromClearAll: Boolean
     ): android.app.Notification {
         val builder = NotificationCompat.Builder(context, channelId)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle("AudioPlayer")
             .setContentText(summaryText ?: "${items.size} sessions")
             .setContentIntent(buildLaunchIntent(context))
-            .setDeleteIntent(buildDismissIntent(context))
+            .setDeleteIntent(if (protectFromClearAll) null else buildDismissIntent(context))
             .setShowWhen(false)
             .setOnlyAlertOnce(true)
             .setSilent(true)
-            .setOngoing(false)
+            .setOngoing(protectFromClearAll)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
@@ -300,7 +328,11 @@ private object UnifiedPlaybackNotificationController {
             summaryLines.forEach(inboxStyle::addLine)
         }
         builder.setStyle(inboxStyle)
-        return builder.build()
+        return builder.build().apply {
+            if (protectFromClearAll) {
+                flags = flags or android.app.Notification.FLAG_NO_CLEAR
+            }
+        }
     }
 
     private fun buildLaunchIntent(
@@ -396,6 +428,27 @@ private object UnifiedPlaybackNotificationController {
             .apply()
     }
 
+    private fun postedNotificationIds(context: Context): Set<Int> {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            return emptySet()
+        }
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            ?: return emptySet()
+        val knownIds = buildSet {
+            add(summaryNotificationId)
+            addAll(activeNotificationIds)
+            addAll(loadPersistedNotificationIds(context))
+        }
+        return manager.activeNotifications
+            ?.filter { statusBarNotification ->
+                val notification = statusBarNotification.notification
+                statusBarNotification.id in knownIds || notification.group == groupKey
+            }
+            ?.map { it.id }
+            ?.toSet()
+            ?: emptySet()
+    }
+
     private fun resolveLargeIcon(artPath: String?): Bitmap? {
         val path = artPath?.takeIf { it.isNotBlank() } ?: return null
         artCache.get(path)?.let { return it }
@@ -461,10 +514,16 @@ class MainActivity : AudioServiceActivity() {
                             call.argument<Boolean>("hasActivePlayback") ?: false
                         val hasActiveTimer =
                             call.argument<Boolean>("hasActiveTimer") ?: false
+                        val usesUnifiedPlaybackNotifications =
+                            call.argument<Boolean>("usesUnifiedPlaybackNotifications") ?: false
+                        val keepForegroundServiceAlive =
+                            call.argument<Boolean>("keepForegroundServiceAlive") ?: false
                         syncPlaybackKeepAlive(
                             enabled = enabled,
                             hasActivePlayback = hasActivePlayback,
-                            hasActiveTimer = hasActiveTimer
+                            hasActiveTimer = hasActiveTimer,
+                            usesUnifiedPlaybackNotifications = usesUnifiedPlaybackNotifications,
+                            keepForegroundServiceAlive = keepForegroundServiceAlive
                         )
                         result.success(null)
                     }
@@ -784,10 +843,14 @@ class MainActivity : AudioServiceActivity() {
     private fun syncPlaybackKeepAlive(
         enabled: Boolean,
         hasActivePlayback: Boolean,
-        hasActiveTimer: Boolean
+        hasActiveTimer: Boolean,
+        usesUnifiedPlaybackNotifications: Boolean,
+        keepForegroundServiceAlive: Boolean
     ) {
         try {
-            if (enabled && hasActiveTimer) {
+            // Pure playback also needs a foreground service on some OEM ROMs,
+            // otherwise the process is still eligible to be culled after screen-off.
+            if (keepForegroundServiceAlive) {
                 val serviceIntent =
                     Intent(applicationContext, PlaybackKeepAliveService::class.java).apply {
                         action = PlaybackKeepAliveService.ACTION_START
@@ -798,6 +861,14 @@ class MainActivity : AudioServiceActivity() {
                         putExtra(
                             PlaybackKeepAliveService.EXTRA_HAS_ACTIVE_TIMER,
                             hasActiveTimer
+                        )
+                        putExtra(
+                            PlaybackKeepAliveService.EXTRA_USES_UNIFIED_PLAYBACK_NOTIFICATION,
+                            usesUnifiedPlaybackNotifications
+                        )
+                        putExtra(
+                            PlaybackKeepAliveService.EXTRA_KEEP_FOREGROUND_SERVICE_ALIVE,
+                            keepForegroundServiceAlive
                         )
                     }
                 ContextCompat.startForegroundService(applicationContext, serviceIntent)
