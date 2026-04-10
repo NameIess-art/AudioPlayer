@@ -47,6 +47,28 @@ extension AudioProviderPersistence on AudioProvider {
     } catch (_) {}
   }
 
+  Future<void> _loadLibraryNodeOrder() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_kLibraryNodeOrderKey);
+      if (raw == null || raw.isEmpty) return;
+      final list = (json.decode(raw) as List<dynamic>).cast<String>();
+      _libraryNodeOrder
+        ..clear()
+        ..addAll(list);
+    } catch (_) {}
+  }
+
+  Future<void> _saveLibraryNodeOrder() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        _kLibraryNodeOrderKey,
+        json.encode(_libraryNodeOrder),
+      );
+    } catch (_) {}
+  }
+
   Future<void> _loadSessionOrder() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -79,11 +101,13 @@ extension AudioProviderPersistence on AudioProvider {
   Future<void> _loadData() async {
     await _loadLibrary();
     await _loadGroupOrder();
-    _syncGroupOrderFromLibrary();
-    _markLibraryStructureDirty();
-    await _loadSessionOrder();
     await _loadWatchedFolders();
     await _loadWatchedLibraries();
+    await _loadLibraryNodeOrder();
+    _syncGroupOrderFromLibrary();
+    _syncLibraryNodeOrder(persist: false);
+    _markLibraryStructureDirty();
+    await _loadSessionOrder();
     await _loadPlaybackSettings();
     await _loadConverterSettings();
     await _loadTimerSettings();
@@ -350,7 +374,6 @@ extension AudioProviderPersistence on AudioProvider {
 
       final map = json.decode(raw) as Map<String, dynamic>;
       final now = DateTime.now();
-
       final durationMs = map['timerDurationMs'] as int?;
       final timerModeIndex = map['timerMode'] as int?;
       final waitingForPlayback =
@@ -361,6 +384,22 @@ extension AudioProviderPersistence on AudioProvider {
           (map['pausedByTimerPaths'] as List<dynamic>? ?? const [])
               .whereType<String>()
               .toList();
+
+      final hasPendingTrigger =
+          waitingForPlayback &&
+          durationMs != null &&
+          durationMs > 0 &&
+          timerModeIndex == TimerMode.trigger.index;
+      final hasRunningCountdown =
+          timerEndsAtMs != null &&
+          durationMs != null &&
+          timerEndsAtMs > now.millisecondsSinceEpoch;
+      final hasPostTimerState =
+          autoResumeAtMs != null || pausedPaths.isNotEmpty;
+      if (!hasPendingTrigger && !hasRunningCountdown && !hasPostTimerState) {
+        await prefs.remove(_kTimerRuntimeKey);
+        return;
+      }
 
       _pausedByTimerPaths
         ..clear()
@@ -427,13 +466,7 @@ extension AudioProviderPersistence on AudioProvider {
   Future<void> _saveTimerRuntime() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final hasRuntime =
-          _timerMode != null ||
-          _timerDuration != null ||
-          _timerActive ||
-          _timerWaitingForPlayback ||
-          _autoResumeAt != null ||
-          _pausedByTimerPaths.isNotEmpty;
+      final hasRuntime = _hasArmedTimerRuntime;
       if (!hasRuntime) {
         await prefs.remove(_kTimerRuntimeKey);
         return;

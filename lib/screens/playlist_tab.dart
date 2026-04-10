@@ -133,27 +133,32 @@ class _PlaylistTabState extends State<PlaylistTab> {
           Expanded(
             child: sessions.isEmpty
                 ? _SessionsEmptyState(bottomInset: bottomInset)
-                : ListView.builder(
+                : ReorderableListView.builder(
                     padding: EdgeInsets.fromLTRB(16, 4, 16, bottomInset),
                     cacheExtent: 720,
                     keyboardDismissBehavior:
                         ScrollViewKeyboardDismissBehavior.onDrag,
+                    buildDefaultDragHandles: false,
+                    onReorder: provider.reorderSessions,
                     itemCount: sessions.length,
                     itemBuilder: (context, index) {
                       final session = sessions[index];
                       final track = provider.trackByPath(
                         session.currentTrackPath,
                       );
-                      return _SessionListCard(
+                      return ReorderableDelayedDragStartListener(
                         key: ValueKey(session.id),
-                        session: session,
-                        provider: provider,
-                        coverPathFuture: _coverFutureForTrack(
-                          _sessionCoverFutureCache,
-                          provider,
-                          track,
+                        index: index,
+                        child: _SessionListCard(
+                          session: session,
+                          provider: provider,
+                          coverPathFuture: _coverFutureForTrack(
+                            _sessionCoverFutureCache,
+                            provider,
+                            track,
+                          ),
+                          onOpen: () => _openSessionDetail(context, session.id),
                         ),
-                        onOpen: () => _openSessionDetail(context, session.id),
                       );
                     },
                   ),
@@ -222,7 +227,6 @@ class _SessionsEmptyState extends StatelessWidget {
 
 class _SessionListCard extends StatefulWidget {
   const _SessionListCard({
-    super.key,
     required this.session,
     required this.provider,
     required this.coverPathFuture,

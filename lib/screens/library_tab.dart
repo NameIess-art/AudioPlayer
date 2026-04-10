@@ -145,7 +145,10 @@ class _LibraryTabState extends State<LibraryTab> {
     }
 
     if (mounted) {
-      context.read<AudioProvider>().addWatchedLibrary(folderPath, notify: false);
+      context.read<AudioProvider>().addWatchedLibrary(
+        folderPath,
+        notify: false,
+      );
     }
     await _addFoldersFromPaths(
       childFolders,
@@ -666,17 +669,20 @@ class _LibraryTabState extends State<LibraryTab> {
                     onImportFile: _addFiles,
                     bottomInset: bottomInset,
                   )
-                : ListView.builder(
+                : ReorderableListView.builder(
                     padding: EdgeInsets.fromLTRB(16, 4, 16, bottomInset),
                     cacheExtent: 720,
                     keyboardDismissBehavior:
                         ScrollViewKeyboardDismissBehavior.onDrag,
+                    buildDefaultDragHandles: false,
+                    onReorder: provider.reorderLibraryNodes,
                     itemCount: tree.length,
                     itemBuilder: (context, index) {
                       final node = tree[index];
-                      return _LibraryTreeItem(
+                      return ReorderableDelayedDragStartListener(
                         key: ValueKey(node.path),
-                        node: node,
+                        index: index,
+                        child: _LibraryTreeItem(node: node),
                       );
                     },
                   ),

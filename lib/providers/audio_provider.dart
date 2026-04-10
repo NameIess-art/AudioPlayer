@@ -25,6 +25,7 @@ part 'audio_provider_playback.dart';
 const _kLibraryKey = 'library_v1';
 const _kSessionsKey = 'sessions_v1';
 const _kGroupOrderKey = 'group_order_v1';
+const _kLibraryNodeOrderKey = 'library_node_order_v1';
 const _kSessionOrderKey = 'session_order_v1';
 const _kWatchedFoldersKey = 'watched_folders_v1';
 const _kWatchedLibrariesKey = 'watched_libraries_v1';
@@ -86,6 +87,7 @@ class AudioProvider with ChangeNotifier {
 
   final List<String> _groupOrder = [];
   final Set<String> _groupOrderSet = <String>{};
+  final List<String> _libraryNodeOrder = [];
   final List<String> _sessionOrder = [];
   final List<String> _watchedFolders = [];
   final List<String> _watchedLibraries = [];

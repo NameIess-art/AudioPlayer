@@ -1,6 +1,36 @@
 part of 'audio_provider.dart';
 
 extension AudioProviderPlayback on AudioProvider {
+  bool get _hasArmedTimerRuntime {
+    final hasPendingTrigger =
+        _timerMode == TimerMode.trigger &&
+        _timerDuration != null &&
+        _timerWaitingForPlayback;
+    final hasRunningCountdown = _timerActive && _timerEndsAt != null;
+    return hasPendingTrigger ||
+        hasRunningCountdown ||
+        _autoResumeAt != null ||
+        _pausedByTimerPaths.isNotEmpty;
+  }
+
+  void _resetTimerRuntimeState({bool clearPausedSessions = true}) {
+    _timerGeneration++;
+    _countdownTimer?.cancel();
+    _countdownTimer = null;
+    _timerMode = null;
+    _timerDuration = null;
+    _timerActive = false;
+    _timerRemaining = null;
+    _timerEndsAt = null;
+    _timerWaitingForPlayback = false;
+    _autoResumeTimer?.cancel();
+    _autoResumeTimer = null;
+    _autoResumeAt = null;
+    if (clearPausedSessions) {
+      _pausedByTimerPaths.clear();
+    }
+  }
+
   Future<void> spawnSession(MusicTrack track) async {
     final session = _createSessionForTrack(track);
     _registerSession(session);
@@ -436,13 +466,7 @@ extension AudioProviderPlayback on AudioProvider {
   }
 
   void cancelTimer() {
-    _cancelTimerInternal();
-    _timerMode = null;
-    _timerDuration = null;
-    _timerRemaining = null;
-    _timerEndsAt = null;
-    _timerWaitingForPlayback = false;
-    _pausedByTimerPaths.clear();
+    _resetTimerRuntimeState();
     _syncKeepCpuAwake();
     _notifyListeners();
     unawaited(_saveTimerRuntime());
@@ -501,12 +525,7 @@ extension AudioProviderPlayback on AudioProvider {
   }
 
   void _resetTimerAfterAutoResumeSuccess() {
-    _timerMode = null;
-    _timerDuration = null;
-    _timerActive = false;
-    _timerRemaining = null;
-    _timerEndsAt = null;
-    _timerWaitingForPlayback = false;
+    _resetTimerRuntimeState(clearPausedSessions: false);
   }
 
   Future<void> _resumeTimerPausedSessions() async {

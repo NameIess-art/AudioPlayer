@@ -1,6 +1,20 @@
 part of 'audio_provider.dart';
 
 extension AudioProviderNotifications on AudioProvider {
+  bool get _hasActivePlaybackSession => activeSessions.any(
+    (session) => session.state.playing || session.isLoading,
+  );
+
+  PlaybackNotificationSnapshot? _buildMediaSessionSnapshot() {
+    if (!_shouldUseUnifiedPlaybackNotifications) {
+      return _buildNotificationSnapshot();
+    }
+    if (!_hasActivePlaybackSession) {
+      return null;
+    }
+    return _buildNotificationSnapshot();
+  }
+
   void _bindNotificationHandler() {
     _notificationHandler.bindCallbacks(
       onPlay: playPrimarySessionFromNotification,
@@ -612,7 +626,7 @@ extension AudioProviderNotifications on AudioProvider {
       return;
     }
     if (_shouldUseUnifiedPlaybackNotifications) {
-      _notificationHandler.updateSnapshot(null);
+      _notificationHandler.updateSnapshot(_buildMediaSessionSnapshot());
       if (immediateUnifiedSync) {
         _unifiedNotificationSyncTimer?.cancel();
         _unifiedNotificationSyncTimer = null;

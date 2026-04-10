@@ -1,9 +1,73 @@
 part of 'audio_provider.dart';
 
 extension AudioProviderLibrary on AudioProvider {
+  String _libraryRootPathForTrack(MusicTrack track, List<String> watchedRoots) {
+    if (track.isSingle) {
+      return track.path;
+    }
+    for (final root in watchedRoots) {
+      if (track.groupKey.startsWith(root)) {
+        return root;
+      }
+    }
+    return track.groupKey;
+  }
+
+  List<String> _currentLibraryTopLevelNodeIds() {
+    final watchedRoots = _watchedFolders.toList(growable: false)
+      ..sort((a, b) => b.length.compareTo(a.length));
+    final ids = <String>[];
+    final seen = <String>{};
+    for (final track in _library) {
+      final nodeId = _libraryRootPathForTrack(track, watchedRoots);
+      if (seen.add(nodeId)) {
+        ids.add(nodeId);
+      }
+    }
+    return ids;
+  }
+
+  void _syncLibraryNodeOrder({bool persist = true}) {
+    final validNodeIds = _currentLibraryTopLevelNodeIds();
+    final validNodeIdSet = validNodeIds.toSet();
+    var changed = false;
+    final previousLength = _libraryNodeOrder.length;
+    _libraryNodeOrder.removeWhere((id) => !validNodeIdSet.contains(id));
+    if (_libraryNodeOrder.length != previousLength) {
+      changed = true;
+    }
+
+    for (final nodeId in validNodeIds) {
+      if (_libraryNodeOrder.contains(nodeId)) continue;
+      _libraryNodeOrder.add(nodeId);
+      changed = true;
+    }
+
+    if (changed && persist) {
+      unawaited(_saveLibraryNodeOrder());
+    }
+  }
+
+  void reorderLibraryNodes(int oldIndex, int newIndex) {
+    final currentIds = buildLibraryTree().map((node) => node.path).toList();
+    if (oldIndex < 0 || oldIndex >= currentIds.length) return;
+    if (newIndex < 0 || newIndex > currentIds.length) return;
+    if (newIndex > oldIndex) newIndex -= 1;
+    final movedId = currentIds.removeAt(oldIndex);
+    currentIds.insert(newIndex, movedId);
+    _libraryNodeOrder
+      ..clear()
+      ..addAll(currentIds);
+    _markLibraryStructureDirty();
+    _notifyListeners();
+    unawaited(_saveLibraryNodeOrder());
+  }
+
   void addWatchedFolder(String folderPath, {bool notify = true}) {
     if (!_watchedFolders.contains(folderPath)) {
       _watchedFolders.add(folderPath);
+      _syncLibraryNodeOrder();
+      _markLibraryStructureDirty();
       if (notify) _notifyListeners();
       unawaited(_saveWatchedFolders());
     }
@@ -19,6 +83,8 @@ extension AudioProviderLibrary on AudioProvider {
 
   void removeWatchedFolder(String folderPath, {bool notify = true}) {
     if (_watchedFolders.remove(folderPath)) {
+      _syncLibraryNodeOrder();
+      _markLibraryStructureDirty();
       if (notify) _notifyListeners();
       unawaited(_saveWatchedFolders());
     }
@@ -62,6 +128,7 @@ extension AudioProviderLibrary on AudioProvider {
     if (toAdd.isNotEmpty) {
       _clearResolvedCoverPaths();
       _rebuildLibraryIndexes();
+      _syncLibraryNodeOrder(persist: false);
       if (notify) {
         _notifyListeners();
       }
@@ -70,6 +137,7 @@ extension AudioProviderLibrary on AudioProvider {
         if (didChangeGroupOrder) {
           _saveGroupOrder();
         }
+        _saveLibraryNodeOrder();
       }
     }
   }
@@ -95,9 +163,11 @@ extension AudioProviderLibrary on AudioProvider {
     }
 
     _rebuildLibraryIndexes();
+    _syncLibraryNodeOrder(persist: false);
     _notifyListeners();
     _saveLibrary();
     _saveGroupOrder();
+    _saveLibraryNodeOrder();
   }
 
   Future<void> removeFolderFromLibrary(String folderPath) async {
@@ -133,9 +203,11 @@ extension AudioProviderLibrary on AudioProvider {
     }
 
     _rebuildLibraryIndexes();
+    _syncLibraryNodeOrder(persist: false);
     _notifyListeners();
     _saveLibrary();
     _saveGroupOrder();
+    _saveLibraryNodeOrder();
   }
 
   int getTrackComparator(MusicTrack a, MusicTrack b) {
@@ -161,15 +233,8 @@ extension AudioProviderLibrary on AudioProvider {
         continue;
       }
 
-      String dirPath = track.groupKey;
-      String? matchedRoot;
-      for (final root in watchedRoots) {
-        if (dirPath.startsWith(root)) {
-          matchedRoot = root;
-          break;
-        }
-      }
-      matchedRoot ??= dirPath;
+      final dirPath = track.groupKey;
+      final matchedRoot = _libraryRootPathForTrack(track, watchedRoots);
 
       if (!rootNodes.containsKey(matchedRoot)) {
         final rootName = _resolveRootNodeName(matchedRoot, track);
@@ -235,6 +300,10 @@ extension AudioProviderLibrary on AudioProvider {
     final topLevel = <LibraryNode>[];
     var leafFolderCount = 0;
 
+    final topLevelOrderIndex = <String, int>{
+      for (var i = 0; i < _libraryNodeOrder.length; i++)
+        _libraryNodeOrder[i]: i,
+    };
     final roots = rootNodes.values.toList();
     for (final root in roots) {
       sortFolder(root);
@@ -243,13 +312,17 @@ extension AudioProviderLibrary on AudioProvider {
       topLevel.add(root);
     }
 
-    topLevel.sort(
-      (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
-    );
-    singleFiles.sort(
-      (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
-    );
     topLevel.addAll(singleFiles);
+    topLevel.sort((a, b) {
+      final aIndex = topLevelOrderIndex[a.path];
+      final bIndex = topLevelOrderIndex[b.path];
+      if (aIndex != null && bIndex != null) {
+        return aIndex.compareTo(bIndex);
+      }
+      if (aIndex != null) return -1;
+      if (bIndex != null) return 1;
+      return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+    });
 
     return _LibraryTreeSnapshot(
       tree: List<LibraryNode>.unmodifiable(topLevel),
