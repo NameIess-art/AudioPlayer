@@ -7,16 +7,6 @@ extension AudioProviderNotifications on AudioProvider {
     (session) => session.state.playing || session.isLoading,
   );
 
-  PlaybackNotificationSnapshot? _buildMediaSessionSnapshot() {
-    if (!_shouldUseUnifiedPlaybackNotifications) {
-      return _buildNotificationSnapshot();
-    }
-    if (!_hasActivePlaybackSession) {
-      return null;
-    }
-    return _buildNotificationSnapshot();
-  }
-
   void _bindNotificationHandler() {
     _notificationHandler.bindCallbacks(
       onPlay: playPrimarySessionFromNotification,
