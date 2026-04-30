@@ -31,6 +31,7 @@ extension AudioProviderNotifications on AudioProvider {
       onSkipToPreviousSession: skipNotificationSessionToPreviousById,
       onSkipToNextSession: skipNotificationSessionToNextById,
       onNotificationDeleted: dismissNotificationsAfterPauseAll,
+      onRestoreNotifications: restoreNotificationsAfterSystemClear,
     );
     _syncNotificationState();
   }
@@ -41,8 +42,11 @@ extension AudioProviderNotifications on AudioProvider {
       _scheduleNotificationActionRefresh();
       return;
     }
+    final hadActivePlayback = _hasActivePlaybackSession;
     await _resumeNotificationSession(session);
-    _scheduleNotificationActionRefresh();
+    _scheduleNotificationActionRefresh(
+      suppressMultiThreadRebuild: hadActivePlayback,
+    );
   }
 
   Future<void> playNotificationSessionById(String mediaId) async {
@@ -51,8 +55,11 @@ extension AudioProviderNotifications on AudioProvider {
       _scheduleNotificationActionRefresh();
       return;
     }
+    final hadActivePlayback = _hasActivePlaybackSession;
     await _resumeNotificationSession(session);
-    _scheduleNotificationActionRefresh();
+    _scheduleNotificationActionRefresh(
+      suppressMultiThreadRebuild: hadActivePlayback,
+    );
   }
 
   Future<void> pausePrimarySessionFromNotification() async {
@@ -79,8 +86,11 @@ extension AudioProviderNotifications on AudioProvider {
       _scheduleNotificationActionRefresh();
       return;
     }
+    final hadActivePlayback = _hasActivePlaybackSession;
     await _resumeNotificationSession(session);
-    _scheduleNotificationActionRefresh();
+    _scheduleNotificationActionRefresh(
+      suppressMultiThreadRebuild: hadActivePlayback,
+    );
   }
 
   Future<void> stopPrimarySessionFromNotification() async {
@@ -126,8 +136,12 @@ extension AudioProviderNotifications on AudioProvider {
     if (!_multiThreadPlaybackEnabled) {
       _notificationFocusSessionId = session.id;
     }
+    final hadActivePlayback = _hasActivePlaybackSession;
+    final wasPlaying = session.state.playing;
     await toggleSessionPlayPause(session.id);
-    _scheduleNotificationActionRefresh();
+    _scheduleNotificationActionRefresh(
+      suppressMultiThreadRebuild: wasPlaying || hadActivePlayback,
+    );
   }
 
   Future<void> skipNotificationSessionToPreviousById(String sessionId) async {
@@ -182,22 +196,17 @@ extension AudioProviderNotifications on AudioProvider {
     _notifyListeners();
   }
 
+  Future<void> restoreNotificationsAfterSystemClear() async {
+    _notificationsDismissedWhilePaused = false;
+    _unifiedNotificationSyncKey = null;
+    _syncNotificationState(immediateUnifiedSync: true);
+    _notifyListeners();
+  }
+
   List<PlaybackSession> get _singleThreadNotificationSessions {
-    final sessions = activeSessions;
-    if (sessions.isEmpty) {
-      return const <PlaybackSession>[];
-    }
-    final visibleSessions = sessions
-        .where((session) => session.state.playing || session.isLoading)
+    return activeSessions
+        .where((session) => session.state.playing || session.isPlaybackStarting)
         .toList(growable: false);
-    if (visibleSessions.isNotEmpty) {
-      return visibleSessions;
-    }
-    final retainedSession = _focusedSessionFrom(sessions);
-    if (retainedSession == null) {
-      return const <PlaybackSession>[];
-    }
-    return <PlaybackSession>[retainedSession];
   }
 
   List<PlaybackSession> get _notificationQueueSessions {
@@ -245,8 +254,12 @@ extension AudioProviderNotifications on AudioProvider {
     return focusedSession;
   }
 
-  void _scheduleNotificationActionRefresh() {
-    _suppressMultiThreadNotificationRebuildBriefly();
+  void _scheduleNotificationActionRefresh({
+    bool suppressMultiThreadRebuild = true,
+  }) {
+    if (suppressMultiThreadRebuild) {
+      _suppressMultiThreadNotificationRebuildBriefly();
+    }
     _syncNotificationState();
     _notifyListeners();
 

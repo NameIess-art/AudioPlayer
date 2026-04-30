@@ -29,6 +29,7 @@ class NativePlaybackService : MediaSessionService() {
         private const val PLAYBACK_CHANNEL_ID = "com.example.music_player.channel.playback"
         private const val PLAYBACK_CHANNEL_NAME = "Playback"
         private const val PLAYBACK_CHANNEL_DESCRIPTION = "Playback notification controls"
+        private const val PLAYBACK_GROUP_KEY = "com.example.music_player.PLAYBACK_GROUP"
         private const val FOREGROUND_NOTIFICATION_ID = 11_225
         private const val FOREGROUND_WATCHDOG_INTERVAL_MS = 4 * 60 * 1000L
         private const val PLAYBACK_WAKE_LOCK_TIMEOUT_MS = 6 * 60 * 1000L
@@ -431,6 +432,14 @@ class NativePlaybackService : MediaSessionService() {
             .setSilent(true)
             .setShowWhen(false)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+            .apply {
+                if (sessions.size > 1) {
+                    setGroup(PLAYBACK_GROUP_KEY)
+                    setGroupSummary(true)
+                    setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_SUMMARY)
+                    setSortKey("0_summary")
+                }
+            }
             .build()
     }
 

@@ -108,7 +108,8 @@ private object UnifiedPlaybackNotificationController {
     private const val channelId = "com.example.music_player.channel.playback"
     private const val channelName = "Playback"
     private const val channelDescription = "Playback notification controls"
-    private const val groupKey = "com.example.music_player.PLAYBACK_GROUP"
+    const val groupKey = "com.example.music_player.PLAYBACK_GROUP"
+    const val dismissNotificationIdExtra = "notificationId"
     private const val summaryNotificationId = 11_225
     private const val prefsName = "music_player_notifications"
     private const val activeIdsKey = "active_notification_ids"
@@ -278,7 +279,7 @@ private object UnifiedPlaybackNotificationController {
         item: UnifiedPlaybackNotificationItem
     ): android.app.Notification {
         val subtitle = item.subtitle?.takeIf { it.isNotBlank() }
-        val builder = basePlaybackNotificationBuilder(context, item)
+        val builder = basePlaybackNotificationBuilder(context, item, summaryNotificationId)
             .setContentText(subtitle)
             .setSubText(null)
             .setContentIntent(buildLaunchIntent(context, sessionId = item.id))
@@ -307,7 +308,7 @@ private object UnifiedPlaybackNotificationController {
         val inboxStyle = NotificationCompat.InboxStyle()
             .setBigContentTitle(mainItem.title)
         childLines.forEach(inboxStyle::addLine)
-        val builder = basePlaybackNotificationBuilder(context, mainItem)
+        val builder = basePlaybackNotificationBuilder(context, mainItem, summaryNotificationId)
             .setContentText(summaryText ?: "${items.size} sessions")
             .setSubText("${items.size} sessions")
             .setContentIntent(buildLaunchIntent(context, sessionId = mainItem.id))
@@ -326,7 +327,8 @@ private object UnifiedPlaybackNotificationController {
         item: UnifiedPlaybackNotificationItem
     ): android.app.Notification {
         val subtitle = item.subtitle?.takeIf { it.isNotBlank() }
-        val builder = basePlaybackNotificationBuilder(context, item)
+        val notificationId = notificationIdFor(item.id)
+        val builder = basePlaybackNotificationBuilder(context, item, notificationId)
             .setContentText(subtitle)
             .setSubText(null)
             .setContentIntent(buildLaunchIntent(context, sessionId = item.id))
@@ -344,12 +346,13 @@ private object UnifiedPlaybackNotificationController {
 
     private fun basePlaybackNotificationBuilder(
         context: Context,
-        item: UnifiedPlaybackNotificationItem
+        item: UnifiedPlaybackNotificationItem,
+        notificationId: Int
     ): NotificationCompat.Builder {
         val builder = NotificationCompat.Builder(context, channelId)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(item.title)
-            .setDeleteIntent(buildDismissIntent(context))
+            .setDeleteIntent(buildDismissIntent(context, notificationId))
             .setShowWhen(false)
             .setOnlyAlertOnce(true)
             .setSilent(true)
@@ -496,10 +499,11 @@ private object UnifiedPlaybackNotificationController {
         return PendingIntent.getBroadcast(context, requestCode, intent, flags)
     }
 
-    private fun buildDismissIntent(context: Context): PendingIntent {
+    private fun buildDismissIntent(context: Context, notificationId: Int): PendingIntent {
         val intent = Intent().apply {
             setClassName(context, "${context.packageName}.UnifiedPlaybackActionReceiver")
             action = NotificationCommand.dismissAll.actionName
+            putExtra(dismissNotificationIdExtra, notificationId)
         }
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or (
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -510,7 +514,7 @@ private object UnifiedPlaybackNotificationController {
         )
         return PendingIntent.getBroadcast(
             context,
-            summaryNotificationId + NotificationCommand.dismissAll.requestCodeOffset,
+            notificationId + NotificationCommand.dismissAll.requestCodeOffset,
             intent,
             flags
         )
@@ -584,7 +588,8 @@ private enum class NotificationCommand(
     toggle("toggle_session_playback", 1),
     previous("session_skip_previous", 2),
     next("session_skip_next", 3),
-    dismissAll("dismiss_all_playback_notifications", 9);
+    dismissAll("dismiss_all_playback_notifications", 9),
+    restore("restore_playback_notifications", 10);
 }
 
 class MainActivity : AudioServiceActivity() {

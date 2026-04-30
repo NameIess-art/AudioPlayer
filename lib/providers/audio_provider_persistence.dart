@@ -539,6 +539,8 @@ extension AudioProviderPersistence on AudioProvider {
     if (!enabled) {
       await _resetSessionsForSingleThreadMode();
     }
+    _unifiedNotificationSyncKey = null;
+    await _clearUnifiedPlaybackNotificationsOnPlatform();
     _syncKeepCpuAwake();
     _syncNotificationState(immediateUnifiedSync: true);
     _notifyListeners();
