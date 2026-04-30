@@ -674,8 +674,8 @@ extension AudioProviderPlayback on AudioProvider {
     final shouldKeepPlaybackAwake = false;
     final hasTimer =
         _timerActive || _timerWaitingForPlayback || _hasPendingAutoResume;
-    final usesUnifiedNotifications = false;
-    final keepForegroundServiceAlive = hasTimer && !hasPlayback;
+    final usesUnifiedNotifications = _multiThreadPlaybackEnabled;
+    final keepForegroundServiceAlive = (hasTimer && !hasPlayback) || (_multiThreadPlaybackEnabled && hasPlayback);
     final shouldKeepAwake =
         shouldKeepPlaybackAwake || keepForegroundServiceAlive;
     if (_keepCpuAwake == shouldKeepAwake &&

@@ -1,7 +1,7 @@
 part of 'audio_provider.dart';
 
 extension AudioProviderNotifications on AudioProvider {
-  bool get _usesNativePlaybackAuthority => true;
+  bool get _usesNativePlaybackAuthority => false;
 
   bool get _hasActivePlaybackSession => activeSessions.any(
     (session) => session.state.playing || session.isLoading,
@@ -698,8 +698,9 @@ extension AudioProviderNotifications on AudioProvider {
       _requestUnifiedPlaybackNotificationFlush();
       return;
     }
+
     if (_shouldUseUnifiedPlaybackNotifications) {
-      _notificationHandler.updateSnapshot(_buildMediaSessionSnapshot());
+      _notificationHandler.updateSnapshot(null);
       if (immediateUnifiedSync) {
         _unifiedNotificationSyncTimer?.cancel();
         _unifiedNotificationSyncTimer = null;
@@ -954,7 +955,7 @@ extension AudioProviderNotifications on AudioProvider {
   }
 
   bool get _shouldUseUnifiedPlaybackNotifications =>
-      _multiThreadPlaybackEnabled && activeSessions.length > 1;
+      _multiThreadPlaybackEnabled;
 
   Duration get _notificationRefreshInterval =>
       _shouldUseUnifiedPlaybackNotifications

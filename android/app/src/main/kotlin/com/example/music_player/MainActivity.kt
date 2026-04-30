@@ -80,7 +80,7 @@ private object PlaybackWakeLockController {
     }
 }
 
-private data class UnifiedPlaybackNotificationItem(
+internal data class UnifiedPlaybackNotificationItem(
     val id: String,
     val title: String,
     val subtitle: String?,
@@ -101,24 +101,25 @@ private fun UnifiedPlaybackNotificationItem.hasSameStableNotification(
         hasNext == other.hasNext
 }
 
-private fun UnifiedPlaybackNotificationItem.stableNotificationSignature(): String {
+internal fun UnifiedPlaybackNotificationItem.stableNotificationSignature(): String {
     return "$id:$title:$subtitle:$artPath:$hasPrevious:$hasNext"
 }
 
-private object UnifiedPlaybackNotificationController {
+internal object UnifiedPlaybackNotificationController {
     private const val channelId = "com.example.music_player.channel.playback"
     private const val channelName = "Playback"
     private const val channelDescription = "Playback notification controls"
     const val groupKey = "com.example.music_player.PLAYBACK_GROUP"
     const val dismissNotificationIdExtra = "notificationId"
     private const val unifiedNotificationExtra = "com.example.music_player.UNIFIED_PLAYBACK_NOTIFICATION"
-    private const val summaryNotificationId = 11_225
+    const val summaryNotificationId = 1107
     private const val prefsName = "music_player_notifications"
     private const val activeIdsKey = "active_notification_ids"
     private val activeNotificationIds = linkedSetOf<Int>()
     private val activeItemsById = linkedMapOf<String, UnifiedPlaybackNotificationItem>()
     private val artCache = object : LruCache<String, Bitmap>(12) {}
     private var lastSummarySignature: String? = null
+    var lastRichSummaryNotification: android.app.Notification? = null
 
     @Synchronized
     fun sync(
@@ -239,16 +240,18 @@ private object UnifiedPlaybackNotificationController {
                 summaryWasReplacedByForegroundService ||
                 !postedNotificationIds.contains(summaryNotificationId)
         ) {
+            val notification = buildMultiSessionNotification(
+                context,
+                mainItem,
+                items,
+                summaryText,
+                summaryLines
+            )
             manager.notify(
                 summaryNotificationId,
-                buildMultiSessionNotification(
-                    context,
-                    mainItem,
-                    items,
-                    summaryText,
-                    summaryLines
-                )
+                notification
             )
+            lastRichSummaryNotification = notification
         }
 
         for (item in items) {
@@ -366,7 +369,7 @@ private object UnifiedPlaybackNotificationController {
             .setShowWhen(false)
             .setOnlyAlertOnce(true)
             .setSilent(true)
-            .setOngoing(false)
+            .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setCategory(NotificationCompat.CATEGORY_TRANSPORT)

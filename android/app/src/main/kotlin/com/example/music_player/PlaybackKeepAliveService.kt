@@ -133,6 +133,11 @@ class PlaybackKeepAliveService : Service() {
         hasActiveTimer: Boolean,
         usesUnifiedPlaybackNotification: Boolean
     ): Notification {
+        if (usesUnifiedPlaybackNotification) {
+            UnifiedPlaybackNotificationController.lastRichSummaryNotification?.let {
+                return it
+            }
+        }
         val contentText = if (hasActiveTimer) {
             "睡眠定时器运行中"
         } else if (usesUnifiedPlaybackNotification) {
