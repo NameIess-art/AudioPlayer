@@ -276,21 +276,19 @@ extension AudioProviderNotifications on AudioProvider {
 
   void _suppressMultiThreadNotificationRebuildBriefly() {
     if (!_multiThreadPlaybackEnabled) return;
-    final suppressedUntil = DateTime.now().add(const Duration(seconds: 8));
+    const suppressionWindow = Duration(milliseconds: 1200);
+    final suppressedUntil = DateTime.now().add(suppressionWindow);
     _multiThreadNotificationRebuildSuppressedUntil = suppressedUntil;
     _multiThreadNotificationRebuildTimer?.cancel();
-    _multiThreadNotificationRebuildTimer = Timer(
-      const Duration(seconds: 8),
-      () {
-        if (_multiThreadNotificationRebuildSuppressedUntil != suppressedUntil) {
-          return;
-        }
-        _multiThreadNotificationRebuildSuppressedUntil = null;
-        _multiThreadNotificationRebuildTimer = null;
-        _unifiedNotificationSyncKey = null;
-        _requestUnifiedPlaybackNotificationFlush();
-      },
-    );
+    _multiThreadNotificationRebuildTimer = Timer(suppressionWindow, () {
+      if (_multiThreadNotificationRebuildSuppressedUntil != suppressedUntil) {
+        return;
+      }
+      _multiThreadNotificationRebuildSuppressedUntil = null;
+      _multiThreadNotificationRebuildTimer = null;
+      _unifiedNotificationSyncKey = null;
+      _requestUnifiedPlaybackNotificationFlush();
+    });
   }
 
   bool get _shouldSuppressMultiThreadNotificationRebuild {

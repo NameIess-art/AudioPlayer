@@ -12,6 +12,7 @@ import android.content.Intent
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.os.PowerManager
 import android.provider.DocumentsContract
 import android.provider.MediaStore
@@ -110,6 +111,7 @@ private object UnifiedPlaybackNotificationController {
     private const val channelDescription = "Playback notification controls"
     const val groupKey = "com.example.music_player.PLAYBACK_GROUP"
     const val dismissNotificationIdExtra = "notificationId"
+    private const val unifiedNotificationExtra = "com.example.music_player.UNIFIED_PLAYBACK_NOTIFICATION"
     private const val summaryNotificationId = 11_225
     private const val prefsName = "music_player_notifications"
     private const val activeIdsKey = "active_notification_ids"
@@ -171,9 +173,11 @@ private object UnifiedPlaybackNotificationController {
         }
         val notificationId = summaryNotificationId
         val nextIds = setOf(notificationId)
+        val postedUnifiedNotifications = postedUnifiedNotificationIds(context)
         if (
             activeItemsById[item.id] != item ||
-                !postedNotificationIds.contains(notificationId)
+                !postedNotificationIds.contains(notificationId) ||
+                !postedUnifiedNotifications.contains(notificationId)
         ) {
             manager.notify(
                 notificationId,
@@ -226,8 +230,13 @@ private object UnifiedPlaybackNotificationController {
             })
         }
         val summaryChanged = summarySignature != lastSummarySignature
+        val postedUnifiedNotifications = postedUnifiedNotificationIds(context)
+        val summaryWasReplacedByForegroundService =
+            postedNotificationIds.contains(summaryNotificationId) &&
+                !postedUnifiedNotifications.contains(summaryNotificationId)
         if (
             (!suppressRebuild && summaryChanged) ||
+                summaryWasReplacedByForegroundService ||
                 !postedNotificationIds.contains(summaryNotificationId)
         ) {
             manager.notify(
@@ -249,6 +258,7 @@ private object UnifiedPlaybackNotificationController {
                     !suppressRebuild &&
                         activeItemsById[item.id]?.hasSameStableNotification(item) != true
                     ) ||
+                    !postedUnifiedNotifications.contains(notificationId) ||
                     !postedNotificationIds.contains(notificationId)
             ) {
                 manager.notify(
@@ -360,6 +370,9 @@ private object UnifiedPlaybackNotificationController {
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
+            .addExtras(Bundle().apply {
+                putBoolean(unifiedNotificationExtra, true)
+            })
         resolveLargeIcon(item.artPath)?.let(builder::setLargeIcon)
         return builder
     }
@@ -552,6 +565,22 @@ private object UnifiedPlaybackNotificationController {
             ?.filter { statusBarNotification ->
                 val notification = statusBarNotification.notification
                 statusBarNotification.id in knownIds || notification.group == groupKey
+            }
+            ?.map { it.id }
+            ?.toSet()
+            ?: emptySet()
+    }
+
+    private fun postedUnifiedNotificationIds(context: Context): Set<Int> {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            return emptySet()
+        }
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            ?: return emptySet()
+        return manager.activeNotifications
+            ?.filter { statusBarNotification ->
+                statusBarNotification.notification.extras
+                    ?.getBoolean(unifiedNotificationExtra, false) == true
             }
             ?.map { it.id }
             ?.toSet()
