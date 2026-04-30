@@ -9,6 +9,8 @@ class TopPageHeader extends StatelessWidget {
     this.titleSuffix,
     this.subtitle,
     this.subtitleMaxLines = 2,
+    this.subtitleFontSize,
+    this.fitSubtitleToWidth = false,
     this.padding = const EdgeInsets.fromLTRB(16, 16, 16, 0),
     this.bottomSpacing = 20,
   });
@@ -19,6 +21,8 @@ class TopPageHeader extends StatelessWidget {
   final Widget? titleSuffix;
   final String? subtitle;
   final int subtitleMaxLines;
+  final double? subtitleFontSize;
+  final bool fitSubtitleToWidth;
   final EdgeInsetsGeometry padding;
   final double bottomSpacing;
 
@@ -81,17 +85,38 @@ class TopPageHeader extends StatelessWidget {
                       ),
                       if (subtitle != null) ...[
                         const SizedBox(height: 4),
-                        Text(
-                          subtitle!,
-                          maxLines: subtitleMaxLines,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(
-                                fontSize: 11,
-                                height: 1.2,
-                                color: cs.onSurfaceVariant,
-                                fontWeight: FontWeight.w600,
+                        LayoutBuilder(
+                          builder: (context, constraints) {
+                            final style = Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  fontSize: subtitleFontSize ?? 11,
+                                  height: 1.16,
+                                  color: cs.onSurfaceVariant,
+                                  fontWeight: FontWeight.w600,
+                                );
+                            final text = Text(
+                              subtitle!,
+                              maxLines: subtitleMaxLines,
+                              softWrap: false,
+                              overflow: TextOverflow.ellipsis,
+                              style: style,
+                            );
+                            if (!fitSubtitleToWidth) return text;
+                            return SizedBox(
+                              width: constraints.maxWidth,
+                              height: (subtitleFontSize ?? 11) * 1.18,
+                              child: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  subtitle!,
+                                  maxLines: 1,
+                                  softWrap: false,
+                                  style: style,
+                                ),
                               ),
+                            );
+                          },
                         ),
                       ],
                     ],

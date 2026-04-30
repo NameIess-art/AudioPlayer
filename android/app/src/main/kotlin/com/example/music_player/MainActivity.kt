@@ -1,4 +1,4 @@
-package com.example.music_player
+﻿package com.example.music_player
 
 import android.app.Activity
 import android.app.NotificationChannel
@@ -23,10 +23,12 @@ import android.webkit.MimeTypeMap
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.documentfile.provider.DocumentFile
 import androidx.media.app.NotificationCompat.MediaStyle
 import com.ryanheise.audioservice.AudioServiceActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
 import java.io.FileOutputStream
@@ -103,6 +105,8 @@ private object UnifiedPlaybackNotificationController {
     @Synchronized
     fun sync(
         context: Context,
+        mode: String,
+        mainSessionId: String?,
         items: List<UnifiedPlaybackNotificationItem>,
         showSummary: Boolean,
         summaryText: String?,
@@ -117,12 +121,110 @@ private object UnifiedPlaybackNotificationController {
             return
         }
 
+        if (mode == "multi") {
+            syncMultiSession(
+                context,
+                manager,
+                postedNotificationIds,
+                mainSessionId,
+                items,
+                summaryText,
+                summaryLines
+            )
+            return
+        }
+
+        syncSingleSession(context, manager, postedNotificationIds, items)
+    }
+
+    private fun syncSingleSession(
+        context: Context,
+        manager: NotificationManagerCompat,
+        postedNotificationIds: Set<Int>,
+        items: List<UnifiedPlaybackNotificationItem>
+    ) {
         val previousIds = buildSet {
             addAll(activeNotificationIds)
             addAll(loadPersistedNotificationIds(context))
         }
-        val protectFromClearAll = items.size > 1
-        val nextIds = mutableSetOf<Int>()
+        val item = items.firstOrNull() ?: run {
+            clear(context)
+            return
+        }
+        val notificationId = summaryNotificationId
+        val nextIds = setOf(notificationId)
+        if (
+            activeItemsById[item.id] != item ||
+                !postedNotificationIds.contains(notificationId)
+        ) {
+            manager.notify(
+                notificationId,
+                buildSingleSessionNotification(context, item)
+            )
+        }
+
+        previousIds
+            .filterNot(nextIds::contains)
+            .forEach(manager::cancel)
+        activeItemsById.clear()
+        activeItemsById[item.id] = item
+        activeNotificationIds.apply {
+            clear()
+            addAll(nextIds)
+        }
+        lastSummarySignature = "single\u0000${item.id}\u0000${item.playing}"
+        savePersistedNotificationIds(context, nextIds)
+    }
+
+    private fun syncMultiSession(
+        context: Context,
+        manager: NotificationManagerCompat,
+        postedNotificationIds: Set<Int>,
+        mainSessionId: String?,
+        items: List<UnifiedPlaybackNotificationItem>,
+        summaryText: String?,
+        summaryLines: List<String>
+    ) {
+        val previousIds = buildSet {
+            addAll(activeNotificationIds)
+            addAll(loadPersistedNotificationIds(context))
+        }
+        val mainItem = items.firstOrNull { it.id == mainSessionId }
+            ?: items.firstOrNull { it.playing }
+            ?: items.first()
+        val nextIds = mutableSetOf(summaryNotificationId)
+        val summarySignature = buildString {
+            append("multi")
+            append('\u0000')
+            append(mainItem.id)
+            append('\u0000')
+            append(mainItem.playing)
+            append('\u0000')
+            append(summaryText.orEmpty())
+            append('\u0000')
+            append(summaryLines.joinToString("\n"))
+            append('\u0000')
+            append(items.joinToString("|") {
+                "${it.id}:${it.title}:${it.subtitle}:${it.playing}:${it.hasPrevious}:${it.hasNext}"
+            })
+        }
+        val summaryChanged = summarySignature != lastSummarySignature
+        if (
+            summaryChanged ||
+                !postedNotificationIds.contains(summaryNotificationId)
+        ) {
+            manager.notify(
+                summaryNotificationId,
+                buildMultiSessionNotification(
+                    context,
+                    mainItem,
+                    items,
+                    summaryText,
+                    summaryLines
+                )
+            )
+        }
+
         for (item in items) {
             val notificationId = notificationIdFor(item.id)
             if (
@@ -131,64 +233,156 @@ private object UnifiedPlaybackNotificationController {
             ) {
                 manager.notify(
                     notificationId,
-                    buildChildNotification(
-                        context,
-                        item,
-                        protectFromClearAll = protectFromClearAll
-                    )
+                    buildMultiSessionChildNotification(context, item)
                 )
             }
             nextIds.add(notificationId)
         }
 
-        val summarySignature = if (showSummary) {
-            buildString {
-                append(summaryText.orEmpty())
-                append('\u0000')
-                append(summaryLines.joinToString("\n"))
-                append('\u0000')
-                append(items.size)
-            }
-        } else {
-            null
-        }
-        if (showSummary) {
-            if (
-                summarySignature != lastSummarySignature ||
-                    !postedNotificationIds.contains(summaryNotificationId)
-            ) {
-                manager.notify(
-                    summaryNotificationId,
-                    buildSummaryNotification(
-                        context,
-                        items,
-                        summaryText,
-                        summaryLines,
-                        protectFromClearAll = protectFromClearAll
-                    )
-                )
-            }
-        } else {
-            manager.cancel(summaryNotificationId)
-        }
-
-        val staleIds = previousIds.filterNot(nextIds::contains)
-        staleIds.forEach(manager::cancel)
-        val activeSessionIds = items.mapTo(mutableSetOf()) { it.id }
-        activeItemsById.keys
-            .filterNot(activeSessionIds::contains)
-            .toList()
-            .forEach(activeItemsById::remove)
-        items.forEach { item ->
-            activeItemsById[item.id] = item
-        }
-
+        previousIds
+            .filterNot(nextIds::contains)
+            .forEach(manager::cancel)
+        activeItemsById.clear()
+        items.forEach { item -> activeItemsById[item.id] = item }
         activeNotificationIds.apply {
             clear()
             addAll(nextIds)
         }
         lastSummarySignature = summarySignature
         savePersistedNotificationIds(context, nextIds)
+    }
+
+    private fun buildSingleSessionNotification(
+        context: Context,
+        item: UnifiedPlaybackNotificationItem
+    ): android.app.Notification {
+        val subtitle = item.subtitle?.takeIf { it.isNotBlank() }
+        val builder = basePlaybackNotificationBuilder(context, item)
+            .setContentText(subtitle)
+            .setSubText(null)
+            .setContentIntent(buildLaunchIntent(context, sessionId = item.id))
+            .setGroup(null)
+            .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_ALL)
+            .setSortKey(null)
+
+        addTransportActions(builder, context, item)
+        val mediaStyle = MediaStyle().setShowActionsInCompactView(
+            *compactActionIndicesFor(item).toIntArray()
+        )
+        builder.setStyle(mediaStyle)
+        return builder.build()
+    }
+
+    private fun buildMultiSessionNotification(
+        context: Context,
+        mainItem: UnifiedPlaybackNotificationItem,
+        items: List<UnifiedPlaybackNotificationItem>,
+        summaryText: String?,
+        summaryLines: List<String>
+    ): android.app.Notification {
+        val childLines = summaryLines.ifEmpty {
+            items.map { item -> "${if (item.playing) "*" else "-"} ${item.title}" }
+        }
+        val inboxStyle = NotificationCompat.InboxStyle()
+            .setBigContentTitle(mainItem.title)
+        childLines.forEach(inboxStyle::addLine)
+        val builder = basePlaybackNotificationBuilder(context, mainItem)
+            .setContentText(summaryText ?: "${items.size} sessions")
+            .setSubText("${items.size} sessions")
+            .setContentIntent(buildLaunchIntent(context, sessionId = mainItem.id))
+            .setGroup(groupKey)
+            .setGroupSummary(true)
+            .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_SUMMARY)
+            .setSortKey("0_summary")
+            .setStyle(inboxStyle)
+
+        addTransportActions(builder, context, mainItem)
+        return builder.build()
+    }
+
+    private fun buildMultiSessionChildNotification(
+        context: Context,
+        item: UnifiedPlaybackNotificationItem
+    ): android.app.Notification {
+        val subtitle = item.subtitle?.takeIf { it.isNotBlank() }
+        val builder = basePlaybackNotificationBuilder(context, item)
+            .setContentText(subtitle)
+            .setSubText(null)
+            .setContentIntent(buildLaunchIntent(context, sessionId = item.id))
+            .setGroup(groupKey)
+            .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_SUMMARY)
+            .setSortKey("1_${item.title}_${item.id}")
+
+        addTransportActions(builder, context, item)
+        val mediaStyle = MediaStyle().setShowActionsInCompactView(
+            *compactActionIndicesFor(item).toIntArray()
+        )
+        builder.setStyle(mediaStyle)
+        return builder.build()
+    }
+
+    private fun basePlaybackNotificationBuilder(
+        context: Context,
+        item: UnifiedPlaybackNotificationItem
+    ): NotificationCompat.Builder {
+        val builder = NotificationCompat.Builder(context, channelId)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(item.title)
+            .setDeleteIntent(buildDismissIntent(context))
+            .setShowWhen(false)
+            .setOnlyAlertOnce(true)
+            .setSilent(true)
+            .setOngoing(false)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
+        resolveLargeIcon(item.artPath)?.let(builder::setLargeIcon)
+        return builder
+    }
+
+    private fun addTransportActions(
+        builder: NotificationCompat.Builder,
+        context: Context,
+        item: UnifiedPlaybackNotificationItem
+    ) {
+        if (item.hasPrevious) {
+            builder.addAction(
+                android.R.drawable.ic_media_previous,
+                "Previous",
+                buildControlIntent(context, item.id, NotificationCommand.previous)
+            )
+        }
+        builder.addAction(
+            if (item.playing) {
+                android.R.drawable.ic_media_pause
+            } else {
+                android.R.drawable.ic_media_play
+            },
+            if (item.playing) "Pause" else "Play",
+            buildControlIntent(context, item.id, NotificationCommand.toggle)
+        )
+        if (item.hasNext) {
+            builder.addAction(
+                android.R.drawable.ic_media_next,
+                "Next",
+                buildControlIntent(context, item.id, NotificationCommand.next)
+            )
+        }
+    }
+
+    private fun compactActionIndicesFor(item: UnifiedPlaybackNotificationItem): List<Int> {
+        val indices = mutableListOf<Int>()
+        var actionIndex = 0
+        if (item.hasPrevious) {
+            indices.add(actionIndex)
+            actionIndex += 1
+        }
+        indices.add(actionIndex)
+        actionIndex += 1
+        if (item.hasNext) {
+            indices.add(actionIndex)
+        }
+        return indices
     }
 
     @Synchronized
@@ -223,116 +417,6 @@ private object UnifiedPlaybackNotificationController {
             setShowBadge(false)
         }
         manager.createNotificationChannel(channel)
-    }
-
-    private fun buildChildNotification(
-        context: Context,
-        item: UnifiedPlaybackNotificationItem,
-        protectFromClearAll: Boolean
-    ): android.app.Notification {
-        val subtitle = item.subtitle?.takeIf { it.isNotBlank() }
-        val builder = NotificationCompat.Builder(context, channelId)
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle(item.title)
-            .setContentText(subtitle)
-            .setSubText(null)
-            .setContentIntent(buildLaunchIntent(context, sessionId = item.id))
-            .setDeleteIntent(buildDismissIntent(context))
-            .setShowWhen(false)
-            .setOnlyAlertOnce(true)
-            .setSilent(true)
-            .setOngoing(false)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
-            .setGroup(groupKey)
-            .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_SUMMARY)
-            .setSortKey("1_${item.title}_${item.id}")
-
-        resolveLargeIcon(item.artPath)?.let(builder::setLargeIcon)
-
-        val compactActionIndices = mutableListOf<Int>()
-        var actionIndex = 0
-
-        if (item.hasPrevious) {
-            builder.addAction(
-                android.R.drawable.ic_media_previous,
-                "Previous",
-                buildControlIntent(context, item.id, NotificationCommand.previous)
-            )
-            compactActionIndices.add(actionIndex)
-            actionIndex += 1
-        }
-        builder.addAction(
-            if (item.playing) {
-                android.R.drawable.ic_media_pause
-            } else {
-                android.R.drawable.ic_media_play
-            },
-            if (item.playing) "Pause" else "Play",
-            buildControlIntent(context, item.id, NotificationCommand.toggle)
-        )
-        compactActionIndices.add(actionIndex)
-        actionIndex += 1
-        if (item.hasNext) {
-            builder.addAction(
-                android.R.drawable.ic_media_next,
-                "Next",
-                buildControlIntent(context, item.id, NotificationCommand.next)
-            )
-            compactActionIndices.add(actionIndex)
-        }
-
-        val mediaStyle = MediaStyle()
-            .setShowActionsInCompactView(*compactActionIndices.toIntArray())
-        builder.setStyle(mediaStyle)
-        return builder.build().apply {
-            if (protectFromClearAll) {
-                flags = flags or android.app.Notification.FLAG_NO_CLEAR
-            }
-        }
-    }
-
-    private fun buildSummaryNotification(
-        context: Context,
-        items: List<UnifiedPlaybackNotificationItem>,
-        summaryText: String?,
-        summaryLines: List<String>,
-        protectFromClearAll: Boolean
-    ): android.app.Notification {
-        val builder = NotificationCompat.Builder(context, channelId)
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("AudioPlayer")
-            .setContentText(summaryText ?: "${items.size} sessions")
-            .setContentIntent(buildLaunchIntent(context))
-            .setDeleteIntent(if (protectFromClearAll) null else buildDismissIntent(context))
-            .setShowWhen(false)
-            .setOnlyAlertOnce(true)
-            .setSilent(true)
-            .setOngoing(protectFromClearAll)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
-            .setGroup(groupKey)
-            .setGroupSummary(true)
-            .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_SUMMARY)
-            .setSortKey("0_summary")
-
-        val inboxStyle = NotificationCompat.InboxStyle()
-            .setBigContentTitle("AudioPlayer")
-        if (summaryLines.isEmpty()) {
-            items.forEach { item ->
-                inboxStyle.addLine(item.title)
-            }
-        } else {
-            summaryLines.forEach(inboxStyle::addLine)
-        }
-        builder.setStyle(inboxStyle)
-        return builder.build().apply {
-            if (protectFromClearAll) {
-                flags = flags or android.app.Notification.FLAG_NO_CLEAR
-            }
-        }
     }
 
     private fun buildLaunchIntent(
@@ -492,6 +576,9 @@ class MainActivity : AudioServiceActivity() {
     private val fileCacheChannel = "music_player/file_cache"
     private val powerChannel = "music_player/power"
     private val notificationsChannel = "music_player/notifications"
+    private val nativePlaybackMethodsChannel = "music_player/native_playback"
+    private val nativePlaybackEventsChannel = "music_player/native_playback/events"
+    private val updateChannel = "music_player/update"
     private val pickAudioSourceRequestCode = 7001
     private var pendingPickAudioResult: MethodChannel.Result? = null
     private var notificationsMethodChannel: MethodChannel? = null
@@ -504,6 +591,16 @@ class MainActivity : AudioServiceActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+
+        val nativePlaybackBridge = NativePlaybackBridge(applicationContext)
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            nativePlaybackMethodsChannel
+        ).setMethodCallHandler(nativePlaybackBridge)
+        EventChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            nativePlaybackEventsChannel
+        ).setStreamHandler(nativePlaybackBridge)
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, powerChannel)
             .setMethodCallHandler { call, result ->
@@ -527,11 +624,32 @@ class MainActivity : AudioServiceActivity() {
                         )
                         result.success(null)
                     }
+                    "stopPlaybackKeepAlive" -> {
+                        stopPlaybackKeepAliveService()
+                        result.success(null)
+                    }
                     "isIgnoringBatteryOptimizations" -> {
                         result.success(isIgnoringBatteryOptimizations())
                     }
                     "openBatteryOptimizationSettings" -> {
                         result.success(openBatteryOptimizationSettings())
+                    }
+                    "openBackgroundRunSettings" -> {
+                        result.success(openBackgroundRunSettings())
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, updateChannel)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "getAppVersion" -> {
+                        result.success(currentAppVersion())
+                    }
+                    "installApk" -> {
+                        val apkPath = call.argument<String>("path")
+                        result.success(installDownloadedApk(apkPath))
                     }
                     else -> result.notImplemented()
                 }
@@ -553,6 +671,8 @@ class MainActivity : AudioServiceActivity() {
                     "syncUnifiedPlaybackNotifications" -> {
                         val rawItems =
                             call.argument<List<Map<String, Any?>>>("items") ?: emptyList()
+                        val mode = call.argument<String>("mode") ?: "single"
+                        val mainSessionId = call.argument<String>("mainSessionId")
                         val showSummary = call.argument<Boolean>("showSummary") ?: false
                         val summaryText = call.argument<String>("summaryText")
                         val summaryLines =
@@ -572,6 +692,8 @@ class MainActivity : AudioServiceActivity() {
                         }
                         UnifiedPlaybackNotificationController.sync(
                             this,
+                            mode,
+                            mainSessionId,
                             items,
                             showSummary,
                             summaryText,
@@ -873,9 +995,7 @@ class MainActivity : AudioServiceActivity() {
                     }
                 ContextCompat.startForegroundService(applicationContext, serviceIntent)
             } else {
-                applicationContext.stopService(
-                    Intent(applicationContext, PlaybackKeepAliveService::class.java)
-                )
+                stopPlaybackKeepAliveService()
             }
         } catch (_: Exception) {
             // Ignore foreground service sync failures and fall back to a wakelock.
@@ -885,6 +1005,27 @@ class MainActivity : AudioServiceActivity() {
         } catch (_: Exception) {
             // Ignore keep-alive sync failures and let playback continue best-effort.
         }
+    }
+
+    private fun stopPlaybackKeepAliveService() {
+        val stopIntent = Intent(applicationContext, PlaybackKeepAliveService::class.java).apply {
+            action = PlaybackKeepAliveService.ACTION_STOP
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                applicationContext.startService(stopIntent)
+            } else {
+                @Suppress("DEPRECATION")
+                applicationContext.startService(stopIntent)
+            }
+        } catch (_: Exception) {
+            // If the service is not startable from the current state, remove it best-effort.
+        }
+        applicationContext.stopService(
+            Intent(applicationContext, PlaybackKeepAliveService::class.java)
+        )
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+        manager?.cancel(1107)
     }
 
     private fun openNotificationSettings(): Boolean {
@@ -922,7 +1063,7 @@ class MainActivity : AudioServiceActivity() {
 
     private fun openBatteryOptimizationSettings(): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
-            return false
+            return openApplicationDetailsSettings()
         }
 
         return try {
@@ -938,6 +1079,143 @@ class MainActivity : AudioServiceActivity() {
             try {
                 val fallbackIntent = Intent(
                     Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS
+                ).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                startActivity(fallbackIntent)
+                true
+            } catch (_: Exception) {
+                openApplicationDetailsSettings()
+            }
+        }
+    }
+
+    private fun openBackgroundRunSettings(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            return openApplicationDetailsSettings()
+        }
+        if (!isIgnoringBatteryOptimizations() && openBatteryOptimizationSettings()) {
+            return true
+        }
+        return openBatteryOptimizationListSettings() || openApplicationDetailsSettings()
+    }
+
+    private fun openBatteryOptimizationListSettings(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            return false
+        }
+        return try {
+            val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            startActivity(intent)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun openApplicationDetailsSettings(): Boolean {
+        return try {
+            val intent = Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.fromParts("package", packageName, null)
+            ).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            startActivity(intent)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun currentAppVersion(): Map<String, Any> {
+        val packageInfo = packageManager.getPackageInfo(packageName, 0)
+        val buildNumber = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            packageInfo.longVersionCode
+        } else {
+            @Suppress("DEPRECATION")
+            packageInfo.versionCode.toLong()
+        }
+        return mapOf(
+            "versionName" to (packageInfo.versionName ?: "0.0.0"),
+            "buildNumber" to buildNumber
+        )
+    }
+
+    private fun installDownloadedApk(apkPath: String?): Map<String, Any?> {
+        if (apkPath.isNullOrBlank()) {
+            return mapOf(
+                "ok" to false,
+                "needsPermission" to false,
+                "message" to "APK path is empty."
+            )
+        }
+
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                !packageManager.canRequestPackageInstalls()
+        ) {
+            openInstallPermissionSettings()
+            return mapOf(
+                "ok" to false,
+                "needsPermission" to true,
+                "message" to "Install permission is required."
+            )
+        }
+
+        val apkFile = File(apkPath)
+        if (!apkFile.exists() || apkFile.length() <= 0) {
+            return mapOf(
+                "ok" to false,
+                "needsPermission" to false,
+                "message" to "APK file does not exist."
+            )
+        }
+
+        return try {
+            val uri = FileProvider.getUriForFile(
+                this,
+                "$packageName.fileprovider",
+                apkFile
+            )
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(intent)
+            mapOf(
+                "ok" to true,
+                "needsPermission" to false,
+                "message" to null
+            )
+        } catch (e: Exception) {
+            mapOf(
+                "ok" to false,
+                "needsPermission" to false,
+                "message" to (e.message ?: "Cannot open installer.")
+            )
+        }
+    }
+
+    private fun openInstallPermissionSettings(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false
+        return try {
+            val intent = Intent(
+                Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                Uri.parse("package:$packageName")
+            ).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            startActivity(intent)
+            true
+        } catch (_: Exception) {
+            try {
+                val fallbackIntent = Intent(
+                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.fromParts("package", packageName, null)
                 ).apply {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK
                 }
@@ -1284,7 +1562,7 @@ class MainActivity : AudioServiceActivity() {
 
     private fun looksLikeMojibake(value: String): Boolean {
         if (value.isEmpty()) return false
-        val pattern = Regex("[ÃÂÅÆÇÐÑØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõöøùúûüýþÿ�]")
+        val pattern = Regex("[脙脗脜脝脟脨脩脴脵脷脹脺脻脼脽脿谩芒茫盲氓忙莽猫茅锚毛矛铆卯茂冒帽貌贸么玫枚酶霉煤没眉媒镁每锟絔")
         return pattern.containsMatchIn(value)
     }
 

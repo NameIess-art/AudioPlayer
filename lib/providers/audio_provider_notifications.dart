@@ -1,6 +1,8 @@
 part of 'audio_provider.dart';
 
 extension AudioProviderNotifications on AudioProvider {
+  bool get _usesNativePlaybackAuthority => true;
+
   bool get _hasActivePlaybackSession => activeSessions.any(
     (session) => session.state.playing || session.isLoading,
   );
@@ -60,7 +62,8 @@ extension AudioProviderNotifications on AudioProvider {
       return;
     }
     _notificationFocusSessionId = session.id;
-    await session.player.pause();
+    await NativePlaybackBridge.instance.pause(session.id);
+    session.setOptimisticState(playing: false);
     _scheduleNotificationActionRefresh();
   }
 
@@ -71,7 +74,8 @@ extension AudioProviderNotifications on AudioProvider {
       return;
     }
     if (session.state.playing) {
-      await session.player.pause();
+      await NativePlaybackBridge.instance.pause(session.id);
+      session.setOptimisticState(playing: false);
       _scheduleNotificationActionRefresh();
       return;
     }
@@ -86,7 +90,8 @@ extension AudioProviderNotifications on AudioProvider {
       return;
     }
     _notificationFocusSessionId = session.id;
-    await session.player.pause();
+    await NativePlaybackBridge.instance.pause(session.id);
+    session.setOptimisticState(playing: false);
     _scheduleNotificationActionRefresh();
   }
 
@@ -158,10 +163,16 @@ extension AudioProviderNotifications on AudioProvider {
 
   Future<void> dismissNotificationsAfterPauseAll() async {
     _notificationsDismissedWhilePaused = true;
-    await pauseAllSessions();
+    await _stopPlaybackKeepAliveOnPlatform();
+    if (_multiThreadPlaybackEnabled) {
+      await clearAllSessions();
+    } else {
+      await pauseAllSessions();
+    }
     await _clearUnifiedPlaybackNotificationsOnPlatform();
     _notificationHandler.updateSnapshot(null);
     _notificationFocusSessionId = _preferredSingleSessionId;
+    _syncKeepCpuAwake();
     _notifyListeners();
   }
 
@@ -229,12 +240,6 @@ extension AudioProviderNotifications on AudioProvider {
   }
 
   void _scheduleNotificationActionRefresh() {
-    if (_shouldUseUnifiedPlaybackNotifications) {
-      _notificationActionRefreshTimer?.cancel();
-      _notificationActionRefreshTimer = null;
-      return;
-    }
-
     _syncNotificationState();
     _notifyListeners();
 
@@ -321,9 +326,9 @@ extension AudioProviderNotifications on AudioProvider {
       mediaItem: mediaItem,
       playing: session.state.playing,
       processingState: _mapProcessingState(session.state.processingState),
-      updatePosition: session.player.position,
-      bufferedPosition: session.player.bufferedPosition,
-      speed: session.player.speed,
+      updatePosition: session.position,
+      bufferedPosition: session.bufferedPosition,
+      speed: session.speed,
       hasPrevious: previousPath != null,
       hasNext: nextPath != null,
     );
@@ -393,7 +398,7 @@ extension AudioProviderNotifications on AudioProvider {
       album: groupTitle,
       artist: notificationSubtitle ?? groupTitle,
       artUri: _notificationArtUriForTrack(track),
-      duration: session.player.duration,
+      duration: session.duration,
       displayTitle: displayName,
       displaySubtitle: notificationSubtitle ?? groupTitle,
       displayDescription: notificationSubtitle ?? groupTitle,
@@ -617,7 +622,31 @@ extension AudioProviderNotifications on AudioProvider {
     }
   }
 
+  Future<void> _stopPlaybackKeepAliveOnPlatform() async {
+    try {
+      await AudioProvider._powerChannel.invokeMethod<void>(
+        'stopPlaybackKeepAlive',
+      );
+    } on MissingPluginException {
+      // The Android power channel is not available on this platform.
+    } catch (e) {
+      debugPrint('AudioProvider._stopPlaybackKeepAliveOnPlatform error: $e');
+    }
+  }
+
   void _syncNotificationState({bool immediateUnifiedSync = false}) {
+    if (_usesNativePlaybackAuthority) {
+      _notificationHandler.updateSnapshot(null);
+      if (immediateUnifiedSync || activeSessions.isEmpty) {
+        _unifiedNotificationSyncTimer?.cancel();
+        _unifiedNotificationSyncTimer = null;
+        _requestUnifiedPlaybackNotificationFlush();
+      } else {
+        _scheduleUnifiedPlaybackNotificationSync();
+      }
+      return;
+    }
+
     if (_notificationsDismissedWhilePaused && !_hasPlaybackToKeepAlive) {
       _unifiedNotificationSyncTimer?.cancel();
       _unifiedNotificationSyncTimer = null;
@@ -644,7 +673,8 @@ extension AudioProviderNotifications on AudioProvider {
   }
 
   void _scheduleUnifiedPlaybackNotificationSync() {
-    if (!_shouldUseUnifiedPlaybackNotifications) {
+    if (!_usesNativePlaybackAuthority &&
+        !_shouldUseUnifiedPlaybackNotifications) {
       _unifiedNotificationSyncTimer?.cancel();
       _unifiedNotificationSyncTimer = null;
       _requestUnifiedPlaybackNotificationFlush();
@@ -677,7 +707,9 @@ extension AudioProviderNotifications on AudioProvider {
         _unifiedNotificationSyncPending = false;
         final shouldShowUnifiedNotifications =
             !_notificationsDismissedWhilePaused &&
-            _shouldUseUnifiedPlaybackNotifications;
+            (_usesNativePlaybackAuthority
+                ? activeSessions.isNotEmpty
+                : _shouldUseUnifiedPlaybackNotifications);
         if (!shouldShowUnifiedNotifications) {
           await _clearUnifiedPlaybackNotificationsOnPlatform();
           continue;
@@ -730,15 +762,33 @@ extension AudioProviderNotifications on AudioProvider {
   }
 
   Future<void> _syncUnifiedPlaybackNotifications() async {
-    final sessionsToShow = _shouldUseUnifiedPlaybackNotifications
-        ? activeSessions
-        : const <PlaybackSession>[];
+    final isMultiMode = _multiThreadPlaybackEnabled;
+    final playingSessions = activeSessions
+        .where((session) => session.state.playing || session.isPlaybackStarting)
+        .toList(growable: false);
+    final mainSession = _focusedSessionFrom(
+      isMultiMode ? activeSessions : playingSessions,
+    );
+    final sessionsToShow = _usesNativePlaybackAuthority
+        ? (isMultiMode
+              ? activeSessions
+              : mainSession == null
+              ? const <PlaybackSession>[]
+              : <PlaybackSession>[mainSession])
+        : (_shouldUseUnifiedPlaybackNotifications
+              ? activeSessions
+              : const <PlaybackSession>[]);
     final showUnifiedSummary = sessionsToShow.isNotEmpty;
     final summaryText = showUnifiedSummary
         ? _notificationSummaryText(sessionsToShow)
         : null;
-    final summaryLines = showUnifiedSummary
-        ? _notificationOverviewTitles(sessionsToShow)
+    final summaryLines = showUnifiedSummary && isMultiMode
+        ? sessionsToShow
+              .map((session) {
+                final marker = session.state.playing ? '*' : '-';
+                return '$marker ${_notificationTitleForSession(session)}';
+              })
+              .toList(growable: false)
         : const <String>[];
 
     final payload = sessionsToShow
@@ -760,6 +810,8 @@ extension AudioProviderNotifications on AudioProvider {
         .toList(growable: false);
 
     final nextSyncKey = json.encode(<String, dynamic>{
+      'mode': isMultiMode ? 'multi' : 'single',
+      'mainSessionId': mainSession?.id,
       'items': payload,
       'showSummary': showUnifiedSummary,
       'summaryText': summaryText,
@@ -776,6 +828,8 @@ extension AudioProviderNotifications on AudioProvider {
         await AudioProvider._notificationsChannel.invokeMethod<void>(
           'syncUnifiedPlaybackNotifications',
           <String, dynamic>{
+            'mode': isMultiMode ? 'multi' : 'single',
+            'mainSessionId': mainSession?.id,
             'items': payload,
             'showSummary': showUnifiedSummary,
             'summaryText': summaryText,
@@ -879,7 +933,7 @@ extension AudioProviderNotifications on AudioProvider {
     _ensureSubtitleTrackLoaded(trackPath);
     final nextText = subtitleTextForTrackAt(
       trackPath,
-      position ?? session.player.position,
+      position ?? session.position,
       subtitleTrack: _subtitleTracks[trackPath],
     );
     final previousText = _notificationSubtitleTexts[session.id];

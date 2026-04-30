@@ -31,7 +31,7 @@ Future<void> main() async {
     config: AudioServiceConfig(
       androidNotificationChannelId: 'com.example.music_player.channel.playback',
       androidNotificationChannelName: 'Playback',
-      androidNotificationOngoing: false,
+      androidNotificationOngoing: true,
       androidStopForegroundOnPause: true,
     ),
   );

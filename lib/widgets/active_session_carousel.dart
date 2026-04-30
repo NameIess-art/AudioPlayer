@@ -200,8 +200,8 @@ class _ActiveSessionCard extends StatelessWidget {
       button: true,
       label: displayName,
       child: StreamBuilder<PlayerState>(
-        stream: session.player.playerStateStream,
-        initialData: session.player.playerState,
+        stream: session.stateStream,
+        initialData: session.state,
         builder: (context, stateSnapshot) {
           final playerState = stateSnapshot.data ?? session.state;
           final isPlaying = playerState.playing;
@@ -247,14 +247,13 @@ class _ActiveSessionCard extends StatelessWidget {
                           builder: (context, snapshot) {
                             final subtitleTrack = snapshot.data;
                             return StreamBuilder<Duration>(
-                              stream: session.player.positionStream,
-                              initialData: session.player.position,
+                              stream: session.positionStream,
+                              initialData: session.position,
                               builder: (context, positionSnapshot) {
                                 final subtitleText = provider
                                     .subtitleTextForTrackAt(
                                       session.currentTrackPath,
-                                      positionSnapshot.data ??
-                                          session.player.position,
+                                      positionSnapshot.data ?? session.position,
                                       subtitleTrack: subtitleTrack,
                                     );
 

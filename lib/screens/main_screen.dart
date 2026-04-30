@@ -41,10 +41,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   );
 
   int _currentIndex = 0;
-  int? _previousIndex;
-  int _transitionToken = 0;
-  int _transitionDirection = 1;
-  double _pageSwipeDelta = 0;
+  late final PageController _pageController;
   bool _notificationPermissionCheckDone = false;
   bool _notificationPermissionCheckQueued = false;
   bool _notificationSettingsDialogVisible = false;
@@ -81,6 +78,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    _pageController = PageController();
     WidgetsBinding.instance.addObserver(this);
     _notificationsChannel.setMethodCallHandler(_handleNotificationsChannelCall);
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -91,6 +89,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _pageController.dispose();
     _notificationSessionNavigationTimer?.cancel();
     _notificationsChannel.setMethodCallHandler(null);
     WidgetsBinding.instance.removeObserver(this);
@@ -115,38 +114,15 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     if (withFeedback) {
       Feedback.forTap(context);
     }
-    _transitionDirection = index > _currentIndex ? 1 : -1;
-    final token = ++_transitionToken;
     setState(() {
-      _previousIndex = _currentIndex;
       _currentIndex = index;
     });
-    Future<void>.delayed(_pageTransitionDuration, () {
-      if (!mounted || token != _transitionToken) return;
-      setState(() {
-        _previousIndex = null;
-      });
-    });
-  }
-
-  void _handlePageSwipeUpdate(DragUpdateDetails details) {
-    _pageSwipeDelta += details.primaryDelta ?? 0;
-  }
-
-  void _handlePageSwipeEnd(DragEndDetails details) {
-    final velocity = details.primaryVelocity ?? 0;
-    final travel = _pageSwipeDelta;
-    _pageSwipeDelta = 0;
-    if (velocity.abs() < 180 && travel.abs() < 72) return;
-
-    final swipeValue = velocity.abs() >= 180 ? velocity : travel;
-    final nextIndex = swipeValue < 0 ? _currentIndex + 1 : _currentIndex - 1;
-    if (nextIndex < 0 || nextIndex >= _pages.length) return;
-    _switchPage(nextIndex);
-  }
-
-  void _handlePageSwipeCancel() {
-    _pageSwipeDelta = 0;
+    if (!_pageController.hasClients) return;
+    _pageController.animateToPage(
+      index,
+      duration: _pageTransitionDuration,
+      curve: _pageTransitionCurve,
+    );
   }
 
   Future<bool> _areNotificationsEnabled() async {
@@ -374,84 +350,77 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     final cs = Theme.of(context).colorScheme;
     final radius = BorderRadius.circular(isDesktop ? 28 : 24);
 
-    return Stack(
-      fit: StackFit.expand,
-      children: List.generate(_pages.length, (index) {
-        final isCurrent = index == _currentIndex;
-        final isPrevious = index == _previousIndex;
-        final shouldShow = isCurrent || isPrevious;
-        final slideOffset = Offset(
-          isCurrent
-              ? 0.024 * _transitionDirection
-              : (-0.03 * _transitionDirection),
-          isCurrent ? 0.008 : 0,
-        );
-
-        return Offstage(
-          offstage: !shouldShow,
-          child: TickerMode(
-            enabled: shouldShow,
-            child: IgnorePointer(
-              ignoring: !isCurrent,
-              child: AnimatedOpacity(
-                opacity: isCurrent ? 1 : 0,
-                duration: _pageTransitionDuration,
-                curve: _pageTransitionCurve,
-                child: AnimatedScale(
-                  scale: isCurrent ? 1 : 0.972,
-                  duration: _pageTransitionDuration,
-                  curve: _pageTransitionCurve,
-                  child: AnimatedSlide(
-                    offset: isCurrent ? Offset.zero : slideOffset,
-                    duration: _pageTransitionDuration,
-                    curve: _pageTransitionCurve,
-                    child: Align(
-                      alignment: Alignment.topCenter,
-                      child: isDesktop
-                          ? ConstrainedBox(
-                              constraints: const BoxConstraints(maxWidth: 980),
-                              child: Padding(
-                                padding: const EdgeInsets.fromLTRB(
-                                  24,
-                                  22,
-                                  24,
-                                  22,
-                                ),
-                                child: DecoratedBox(
-                                  decoration: BoxDecoration(
-                                    color: cs.surfaceContainerLow,
-                                    borderRadius: radius,
-                                    border: Border.all(
-                                      color: cs.outlineVariant.withValues(
-                                        alpha: 0.85,
-                                      ),
-                                    ),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: cs.shadow.withValues(alpha: 0.1),
-                                        blurRadius: 28,
-                                        offset: const Offset(0, 12),
-                                      ),
-                                    ],
-                                  ),
-                                  child: ClipRRect(
-                                    borderRadius: radius,
-                                    child: RepaintBoundary(
-                                      child: _pages[index],
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            )
-                          : RepaintBoundary(child: _pages[index]),
+    Widget pageShell(int index) {
+      return Align(
+        alignment: Alignment.topCenter,
+        child: isDesktop
+            ? ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 980),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 22, 24, 22),
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: cs.surfaceContainerLow,
+                      borderRadius: radius,
+                      border: Border.all(
+                        color: cs.outlineVariant.withValues(alpha: 0.85),
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: cs.shadow.withValues(alpha: 0.1),
+                          blurRadius: 28,
+                          offset: const Offset(0, 12),
+                        ),
+                      ],
+                    ),
+                    child: ClipRRect(
+                      borderRadius: radius,
+                      child: RepaintBoundary(child: _pages[index]),
                     ),
                   ),
                 ),
-              ),
-            ),
-          ),
+              )
+            : RepaintBoundary(child: _pages[index]),
+      );
+    }
+
+    return PageView.builder(
+      controller: _pageController,
+      itemCount: _pages.length,
+      physics: const PageScrollPhysics(parent: ClampingScrollPhysics()),
+      onPageChanged: (index) {
+        if (_currentIndex == index) return;
+        setState(() {
+          _currentIndex = index;
+        });
+      },
+      itemBuilder: (context, index) {
+        return AnimatedBuilder(
+          animation: _pageController,
+          builder: (context, child) {
+            double pageOffset = 0;
+            if (_pageController.hasClients &&
+                _pageController.position.haveDimensions) {
+              pageOffset =
+                  ((_pageController.page ?? _currentIndex.toDouble()) - index)
+                      .toDouble();
+            } else {
+              pageOffset = (_currentIndex - index).toDouble();
+            }
+            final clampedOffset = pageOffset.clamp(-1.0, 1.0).toDouble();
+            final opacity = (1 - (clampedOffset.abs() * 0.16))
+                .clamp(0.0, 1.0)
+                .toDouble();
+            final scale = 1 - (clampedOffset.abs() * 0.018);
+
+            return Opacity(
+              opacity: opacity,
+              child: Transform.scale(scale: scale, child: child),
+            );
+          },
+          child: pageShell(index),
         );
-      }),
+      },
     );
   }
 
@@ -844,13 +813,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                 children: [
                   MobileOverlayInset(
                     bottomInset: mobileContentInset,
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.translucent,
-                      onHorizontalDragUpdate: _handlePageSwipeUpdate,
-                      onHorizontalDragEnd: _handlePageSwipeEnd,
-                      onHorizontalDragCancel: _handlePageSwipeCancel,
-                      child: _buildAnimatedBody(isDesktop: false),
-                    ),
+                    child: _buildAnimatedBody(isDesktop: false),
                   ),
                   _buildMobileBottomDock(
                     context,
@@ -1069,51 +1032,63 @@ class _FloatingGlassPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final fillAlpha = isDark ? 0.42 : 0.62;
 
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(radius),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            cs.surfaceContainerLow.withValues(alpha: primaryFillOpacity),
-            cs.surfaceContainer.withValues(alpha: secondaryFillOpacity),
-          ],
-        ),
-        border: Border.all(
-          color: cs.outlineVariant.withValues(alpha: borderOpacity),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: cs.shadow.withValues(alpha: shadowOpacity),
-            blurRadius: 26,
-            offset: const Offset(0, 14),
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(radius),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(radius),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                cs.surfaceContainerLow.withValues(
+                  alpha: (primaryFillOpacity * fillAlpha).clamp(0.0, 0.92),
+                ),
+                cs.surfaceContainer.withValues(
+                  alpha: (secondaryFillOpacity * fillAlpha).clamp(0.0, 0.82),
+                ),
+              ],
+            ),
+            border: Border.all(
+              color: cs.outlineVariant.withValues(alpha: borderOpacity),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: cs.shadow.withValues(alpha: shadowOpacity),
+                blurRadius: 26,
+                offset: const Offset(0, 14),
+              ),
+            ],
           ),
-        ],
-      ),
-      child: Stack(
-        children: [
-          if (showTopHighlight)
-            Positioned.fill(
-              child: IgnorePointer(
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [
-                        Colors.white.withValues(alpha: 0.045),
-                        Colors.white.withValues(alpha: 0),
-                      ],
-                      stops: const [0, 0.22],
+          child: Stack(
+            children: [
+              if (showTopHighlight)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            Colors.white.withValues(alpha: 0.12),
+                            Colors.white.withValues(alpha: 0),
+                          ],
+                          stops: const [0, 0.24],
+                        ),
+                      ),
                     ),
                   ),
                 ),
-              ),
-            ),
-          Padding(padding: padding, child: child),
-        ],
+              Padding(padding: padding, child: child),
+            ],
+          ),
+        ),
       ),
     );
   }

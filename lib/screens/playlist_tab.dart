@@ -25,13 +25,20 @@ Future<String?> _coverFutureForTrack(
   AudioProvider provider,
   MusicTrack? track,
 ) {
-  return provider.coverPathFutureForTrack(track);
+  if (track == null) {
+    return Future<String?>.value();
+  }
+  return cache.putIfAbsent(
+    track.path,
+    () => provider.coverPathFutureForTrack(track),
+  );
 }
 
 PageRoute<void> buildSessionDetailRoute({required String sessionId}) {
   return buildAppOverlayRoute(
     child: SessionDetailPage(sessionId: sessionId),
     beginOffset: const Offset(0, 0.028),
+    reverseDuration: Duration.zero,
   );
 }
 
@@ -96,6 +103,9 @@ class _PlaylistTabState extends State<PlaylistTab> {
             icon: Icons.graphic_eq_rounded,
             title: i18n.tr('playback_sessions'),
             subtitle: sessionSummary,
+            subtitleMaxLines: 1,
+            subtitleFontSize: 9,
+            fitSubtitleToWidth: true,
             trailing: SizedBox(
               width: 112,
               height: 44,
@@ -357,8 +367,8 @@ class _SessionListCardState extends State<_SessionListCard> {
     final revealProgress = (_revealedWidth / _actionWidth).clamp(0.0, 1.0);
 
     return StreamBuilder<PlayerState>(
-      stream: session.player.playerStateStream,
-      initialData: session.player.playerState,
+      stream: session.stateStream,
+      initialData: session.state,
       builder: (context, snapshot) {
         final playerState = snapshot.data ?? session.state;
         final isPlaying = playerState.playing;
@@ -706,7 +716,7 @@ class _SessionDetailPageState extends State<SessionDetailPage>
   void _primeCoverArtwork(Future<String?> coverPathFuture) {
     final mediaSize = MediaQuery.sizeOf(context);
     final heroHeight = min(300.0, max(210.0, mediaSize.height * 0.34));
-    final dpr = MediaQuery.devicePixelRatioOf(context);
+    final dpr = min(MediaQuery.devicePixelRatioOf(context), 2.0);
     final cacheWidth = (mediaSize.width * dpr).round();
     final cacheHeight = (heroHeight * dpr).round();
     final precacheKey = '$_currentSessionId:$cacheWidth:$cacheHeight';
@@ -743,13 +753,34 @@ class _SessionDetailPageState extends State<SessionDetailPage>
     final velocity = details.primaryVelocity ?? 0;
     final shouldDismiss = _dismissController.value > 0.18 || velocity > 900;
     if (shouldDismiss) {
-      await _dismissController.animateTo(1, curve: Curves.easeOutCubic);
+      await _animateDismissToEnd(velocity: velocity);
       if (mounted) {
         navigator.maybePop();
       }
       return;
     }
-    await _dismissController.animateBack(0, curve: Curves.easeOutCubic);
+    await _animateDismissBack();
+  }
+
+  Future<void> _animateDismissToEnd({double velocity = 0}) {
+    final remaining = (1 - _dismissController.value).clamp(0.0, 1.0);
+    final velocityFactor = (velocity.abs() / 2200).clamp(0.0, 1.0);
+    final durationMs = lerpDouble(170, 82, velocityFactor)! * remaining;
+    return _dismissController.animateTo(
+      1,
+      duration: Duration(milliseconds: durationMs.round().clamp(72, 170)),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  Future<void> _animateDismissBack() {
+    final progress = _dismissController.value.clamp(0.0, 1.0);
+    final durationMs = lerpDouble(90, 190, progress)!;
+    return _dismissController.animateBack(
+      0,
+      duration: Duration(milliseconds: durationMs.round().clamp(90, 190)),
+      curve: Curves.easeOutCubic,
+    );
   }
 
   void _changeSessionByOffset(AudioProvider provider, int offset) {
@@ -789,23 +820,50 @@ class _SessionDetailPageState extends State<SessionDetailPage>
 
   @override
   Widget build(BuildContext context) {
-    final provider = context.watch<AudioProvider>();
-    final session = provider.activeSessions.cast<PlaybackSession?>().firstWhere(
-      (candidate) => candidate?.id == _currentSessionId,
-      orElse: () => null,
-    );
+    final selection = context
+        .select<
+          AudioProvider,
+          ({
+            PlaybackSession? session,
+            String? fallbackSessionId,
+            String sessionIds,
+            String? trackPath,
+            bool? loading,
+            bool? playing,
+            ProcessingState? processingState,
+            SessionLoopMode? loopMode,
+            double? volume,
+          })
+        >((provider) {
+          final sessions = provider.activeSessions;
+          final session = sessions.cast<PlaybackSession?>().firstWhere(
+            (candidate) => candidate?.id == _currentSessionId,
+            orElse: () => null,
+          );
+          return (
+            session: session,
+            fallbackSessionId: sessions.isEmpty ? null : sessions.first.id,
+            sessionIds: sessions.map((session) => session.id).join('\u0001'),
+            trackPath: session?.currentTrackPath,
+            loading: session?.isLoading,
+            playing: session?.state.playing,
+            processingState: session?.state.processingState,
+            loopMode: session?.loopMode,
+            volume: session?.volume,
+          );
+        });
+    final provider = context.read<AudioProvider>();
+    final session = selection.session;
 
     if (session == null) {
-      final fallbackSession = provider.activeSessions.isEmpty
-          ? null
-          : provider.activeSessions.first;
-      if (fallbackSession == null) {
+      final fallbackSessionId = selection.fallbackSessionId;
+      if (fallbackSessionId == null) {
         return const Scaffold(body: SizedBox.shrink());
       }
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         setState(() {
-          _currentSessionId = fallbackSession.id;
+          _currentSessionId = fallbackSessionId;
         });
       });
       return const Scaffold(body: SizedBox.shrink());
@@ -851,17 +909,15 @@ class _SessionDetailPageState extends State<SessionDetailPage>
               ),
               Positioned.fill(
                 child: IgnorePointer(
-                  child: _SessionDetailBackdrop(opacity: backdropOpacity),
+                  child: Opacity(
+                    opacity: backdropOpacity,
+                    child: const _SessionDetailBackdrop(),
+                  ),
                 ),
               ),
               Transform.translate(
                 offset: Offset(0, enterOffset + dragDistance),
-                child: Opacity(
-                  opacity:
-                      (0.94 + (0.06 * enterProgress)) -
-                      (dismissProgress * 0.04),
-                  child: child,
-                ),
+                child: child,
               ),
             ],
           );
@@ -888,17 +944,14 @@ class _SessionDetailPageState extends State<SessionDetailPage>
             onVerticalDragEnd: (details) =>
                 _handleVerticalDragEnd(details, context),
             onVerticalDragCancel: () {
-              _dismissController.animateBack(0, curve: Curves.easeOutCubic);
+              _animateDismissBack();
             },
             child: _SessionDetailScaffold(
               session: session,
               provider: provider,
               coverPathFuture: coverPathFuture,
               onClose: () async {
-                await _dismissController.animateTo(
-                  1,
-                  curve: Curves.easeOutCubic,
-                );
+                await _animateDismissToEnd();
                 if (context.mounted) {
                   Navigator.of(context).maybePop();
                 }
@@ -912,14 +965,11 @@ class _SessionDetailPageState extends State<SessionDetailPage>
 }
 
 class _SessionDetailBackdrop extends StatelessWidget {
-  const _SessionDetailBackdrop({required this.opacity});
-
-  final double opacity;
+  const _SessionDetailBackdrop();
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final clampedOpacity = opacity.clamp(0.0, 1.0);
 
     return Stack(
       fit: StackFit.expand,
@@ -930,19 +980,16 @@ class _SessionDetailBackdrop extends StatelessWidget {
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
               colors: [
-                cs.surface.withValues(alpha: 0.08 * clampedOpacity),
-                cs.scrim.withValues(alpha: 0.08 * clampedOpacity),
-                cs.scrim.withValues(alpha: 0.14 * clampedOpacity),
+                cs.surface.withValues(alpha: 0.08),
+                cs.scrim.withValues(alpha: 0.08),
+                cs.scrim.withValues(alpha: 0.14),
               ],
             ),
           ),
         ),
         ClipRect(
           child: BackdropFilter(
-            filter: ImageFilter.blur(
-              sigmaX: 18 * clampedOpacity,
-              sigmaY: 18 * clampedOpacity,
-            ),
+            filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
             child: SizedBox.expand(),
           ),
         ),
@@ -1309,7 +1356,7 @@ class _SessionHeroArtwork extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final availableWidth = max(1.0, MediaQuery.sizeOf(context).width - 32);
-    final dpr = MediaQuery.devicePixelRatioOf(context);
+    final dpr = min(MediaQuery.devicePixelRatioOf(context), 2.0);
     final cacheWidth = max(1, (availableWidth * dpr).round());
     final cacheHeight = max(1, (height * dpr).round());
 
@@ -1891,17 +1938,17 @@ class _ProgressBarState extends State<_ProgressBar> {
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<Duration?>(
-      stream: widget.session.player.durationStream,
-      initialData: widget.session.player.duration,
+      stream: widget.session.durationStream,
+      initialData: widget.session.duration,
       builder: (context, snapshot) {
         final duration = snapshot.data ?? Duration.zero;
         return StreamBuilder<Duration>(
-          stream: widget.session.player.positionStream,
-          initialData: widget.session.player.position,
+          stream: widget.session.positionStream,
+          initialData: widget.session.position,
           builder: (context, snapshot) {
             return StreamBuilder<Duration>(
-              stream: widget.session.player.bufferedPositionStream,
-              initialData: widget.session.player.bufferedPosition,
+              stream: widget.session.bufferedPositionStream,
+              initialData: widget.session.bufferedPosition,
               builder: (context, bufferedSnapshot) {
                 var position = snapshot.data ?? Duration.zero;
                 if (position > duration) position = duration;
@@ -2017,12 +2064,12 @@ class _SessionSubtitlePanel extends StatelessWidget {
       builder: (context, subtitleSnapshot) {
         final subtitleTrack = subtitleSnapshot.data;
         return StreamBuilder<Duration>(
-          stream: session.player.positionStream,
-          initialData: session.player.position,
+          stream: session.positionStream,
+          initialData: session.position,
           builder: (context, positionSnapshot) {
             final subtitleText = provider.subtitleTextForTrackAt(
               session.currentTrackPath,
-              positionSnapshot.data ?? session.player.position,
+              positionSnapshot.data ?? session.position,
               subtitleTrack: subtitleTrack,
             );
             if (subtitleText == null) {

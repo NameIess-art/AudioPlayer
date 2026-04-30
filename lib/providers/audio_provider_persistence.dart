@@ -144,14 +144,9 @@ extension AudioProviderPersistence on AudioProvider {
           milliseconds: max(0, restoredPositionMs),
         );
 
-        final player = AudioPlayer(
-          handleInterruptions: false,
-          handleAudioSessionActivation: false,
-        );
         final restoredSessionId = item['id'] as String? ?? _nextSessionId();
         final session = PlaybackSession(
           id: restoredSessionId,
-          player: player,
           currentTrackPath: track.path,
           loopMode: loopMode,
           nonSingleLoopMode: loopMode == SessionLoopMode.single
@@ -159,7 +154,7 @@ extension AudioProviderPersistence on AudioProvider {
               : loopMode,
           volume: volume,
           createdAt: DateTime.now(),
-          state: player.playerState,
+          state: PlayerState(false, ProcessingState.idle),
         );
         session.lastKnownPosition = restoredPosition;
         session.lastPersistedPositionBucket = restoredPosition.inSeconds ~/ 5;
@@ -172,14 +167,17 @@ extension AudioProviderPersistence on AudioProvider {
           final uri = track.path.startsWith('content://')
               ? Uri.parse(track.path)
               : Uri.file(track.path);
-          await player.setAudioSource(AudioSource.uri(uri));
-          await player.setVolume(volume);
-          await player.setLoopMode(
-            loopMode == SessionLoopMode.single ? LoopMode.one : LoopMode.off,
+          await NativePlaybackBridge.instance.prepareSession(
+            sessionId: session.id,
+            uri: uri,
+            title: track.displayName,
+            subtitle: track.groupTitle,
+            artUri: null,
+            startPosition: restoredPosition,
+            volume: volume,
+            repeatOne: loopMode == SessionLoopMode.single,
+            autoPlay: false,
           );
-          if (restoredPosition > Duration.zero) {
-            await player.seek(restoredPosition);
-          }
           session.loadedPath = track.path;
           _ensureSubtitleTrackLoaded(track.path);
           _refreshNotificationSubtitleForSession(
@@ -229,7 +227,7 @@ extension AudioProviderPersistence on AudioProvider {
                 'positionMs': max(
                   0,
                   max(
-                    s.player.position.inMilliseconds,
+                    s.position.inMilliseconds,
                     s.lastKnownPosition.inMilliseconds,
                   ),
                 ),

@@ -45,13 +45,8 @@ extension AudioProviderPlayback on AudioProvider {
     SessionLoopMode loopMode = SessionLoopMode.folderSequential,
     double volume = 1.0,
   }) {
-    final player = AudioPlayer(
-      handleInterruptions: false,
-      handleAudioSessionActivation: false,
-    );
     return PlaybackSession(
       id: _nextSessionId(),
-      player: player,
       currentTrackPath: track.path,
       loopMode: loopMode,
       nonSingleLoopMode: loopMode == SessionLoopMode.single
@@ -59,7 +54,7 @@ extension AudioProviderPlayback on AudioProvider {
           : loopMode,
       volume: volume,
       createdAt: DateTime.now(),
-      state: player.playerState,
+      state: PlayerState(false, ProcessingState.idle),
     )..isLoading = true;
   }
 
@@ -70,6 +65,7 @@ extension AudioProviderPlayback on AudioProvider {
     _sessionOrder.insert(0, session.id);
     _markActiveSessionsDirty();
     _bindSessionListeners(session);
+    _syncKeepCpuAwake();
     _syncNotificationState();
     _notifyListeners();
   }
@@ -94,12 +90,31 @@ extension AudioProviderPlayback on AudioProvider {
   }
 
   void _bindSessionListeners(PlaybackSession session) {
-    final stateSub = session.player.playerStateStream.listen((state) {
+    final stateSub = session.stateStream.listen((state) {
       if (!_sessions.containsKey(session.id)) return;
 
-      final previousPlaying = session.state.playing;
-      final previousProcessing = session.state.processingState;
+      final previousState =
+          session._previousStateBeforeLastStateEvent ?? session.state;
+      session._previousStateBeforeLastStateEvent = null;
+      final previousPlaying = previousState.playing;
+      final previousProcessing = previousState.processingState;
       session.state = state;
+      final isNewCompletion =
+          previousProcessing != ProcessingState.completed &&
+          state.processingState == ProcessingState.completed;
+      final shouldAutoAdvanceAfterCompletion =
+          isNewCompletion &&
+          !session.isLoading &&
+          session.loopMode != SessionLoopMode.single &&
+          _nextPathFor(session, forward: true) != null;
+      if (shouldAutoAdvanceAfterCompletion) {
+        session.isLoading = true;
+      }
+      if (state.playing ||
+          state.processingState == ProcessingState.idle ||
+          state.processingState == ProcessingState.completed) {
+        session.isPlaybackStarting = false;
+      }
       _syncKeepCpuAwake();
       _syncNotificationState();
       _notifyListeners();
@@ -109,17 +124,13 @@ extension AudioProviderPlayback on AudioProvider {
         _scheduleSaveSessionState();
       }
 
-      final isNewCompletion =
-          previousProcessing != ProcessingState.completed &&
-          state.processingState == ProcessingState.completed;
-
-      if (isNewCompletion && !session.isLoading) {
+      if (isNewCompletion && shouldAutoAdvanceAfterCompletion) {
         _handleSessionCompleted(session.id);
       }
     });
     session.subscriptions.add(stateSub);
 
-    final positionSub = session.player.positionStream.listen((position) {
+    final positionSub = session.positionStream.listen((position) {
       if (!_sessions.containsKey(session.id)) return;
       session.lastKnownPosition = position;
       final positionBucket = position.inSeconds ~/ 5;
@@ -137,15 +148,13 @@ extension AudioProviderPlayback on AudioProvider {
     });
     session.subscriptions.add(positionSub);
 
-    final durationSub = session.player.durationStream.listen((_) {
+    final durationSub = session.durationStream.listen((_) {
       if (!_sessions.containsKey(session.id)) return;
       _scheduleFocusedNotificationRefresh(session.id, immediate: true);
     });
     session.subscriptions.add(durationSub);
 
-    final bufferedPositionSub = session.player.bufferedPositionStream.listen((
-      _,
-    ) {
+    final bufferedPositionSub = session.bufferedPositionStream.listen((_) {
       if (!_sessions.containsKey(session.id)) return;
       _scheduleFocusedNotificationRefresh(session.id);
     });
@@ -161,8 +170,14 @@ extension AudioProviderPlayback on AudioProvider {
     if (!_sessions.containsKey(session.id)) return;
 
     session.loadGeneration++;
-    if (markLoading) {
+    if (!session.isLoading) {
       session.isLoading = true;
+      _syncKeepCpuAwake();
+      _syncNotificationState();
+      if (markLoading) {
+        _notifyListeners();
+      }
+    } else if (markLoading) {
       _notifyListeners();
     }
     var prepared = false;
@@ -181,18 +196,30 @@ extension AudioProviderPlayback on AudioProvider {
           ? Uri.parse(nextPath)
           : Uri.file(nextPath);
 
+      final track = trackByPath(nextPath);
+      final coverPath = coverPathForTrack(track);
       if (session.loadedPath != nextPath) {
-        await session.player.setAudioSource(AudioSource.uri(uri));
+        await NativePlaybackBridge.instance.prepareSession(
+          sessionId: session.id,
+          uri: uri,
+          title: track?.displayName ?? path.basenameWithoutExtension(nextPath),
+          subtitle: track?.groupTitle,
+          artUri: coverPath == null ? null : Uri.file(coverPath),
+          startPosition: Duration.zero,
+          volume: session.volume,
+          repeatOne: session.loopMode == SessionLoopMode.single,
+          autoPlay: false,
+        );
         session.loadedPath = nextPath;
       } else {
-        await session.player.seek(Duration.zero);
+        await NativePlaybackBridge.instance.seek(session.id, Duration.zero);
+        session.setOptimisticPosition(Duration.zero);
       }
 
-      await session.player.setVolume(session.volume);
-      await session.player.setLoopMode(
-        session.loopMode == SessionLoopMode.single
-            ? LoopMode.one
-            : LoopMode.off,
+      await NativePlaybackBridge.instance.setVolume(session.id, session.volume);
+      await NativePlaybackBridge.instance.setRepeatOne(
+        session.id,
+        session.loopMode == SessionLoopMode.single,
       );
       prepared = true;
     } catch (e) {
@@ -218,7 +245,8 @@ extension AudioProviderPlayback on AudioProvider {
     if (session == null || session.isLoading) return;
 
     if (session.state.playing) {
-      await session.player.pause();
+      await NativePlaybackBridge.instance.pause(session.id);
+      session.setOptimisticState(playing: false);
     } else if (session.state.processingState == ProcessingState.completed) {
       await _prepareAndPlay(session, nextPath: session.currentTrackPath);
     } else {
@@ -242,6 +270,7 @@ extension AudioProviderPlayback on AudioProvider {
       final session = _sessions.remove(sessionId);
       if (session == null) continue;
       removedAny = true;
+      session.isPlaybackStarting = false;
       removedSessions.add(session);
       _clearNotificationSubtitleForSession(sessionId);
       if (_notificationFocusSessionId == sessionId) {
@@ -255,7 +284,7 @@ extension AudioProviderPlayback on AudioProvider {
     _markActiveSessionsDirty();
     await Future.wait(
       removedSessions.map((session) async {
-        await session.player.stop();
+        await NativePlaybackBridge.instance.removeSession(session.id);
         session.dispose();
       }),
     );
@@ -280,8 +309,9 @@ extension AudioProviderPlayback on AudioProvider {
     if (mode != SessionLoopMode.single) {
       session.nonSingleLoopMode = mode;
     }
-    await session.player.setLoopMode(
-      mode == SessionLoopMode.single ? LoopMode.one : LoopMode.off,
+    await NativePlaybackBridge.instance.setRepeatOne(
+      session.id,
+      mode == SessionLoopMode.single,
     );
     _syncNotificationState();
     _notifyListeners();
@@ -355,7 +385,7 @@ extension AudioProviderPlayback on AudioProvider {
       return;
     }
     session.volume = nextVolume;
-    await session.player.setVolume(session.volume);
+    await NativePlaybackBridge.instance.setVolume(session.id, session.volume);
     if (notify) {
       _notifyListeners();
     }
@@ -367,8 +397,8 @@ extension AudioProviderPlayback on AudioProvider {
   Future<void> seekSession(String sessionId, Duration position) async {
     final session = _sessions[sessionId];
     if (session != null) {
-      await session.player.seek(position);
-      session.lastKnownPosition = position;
+      await NativePlaybackBridge.instance.seek(session.id, position);
+      session.setOptimisticPosition(position);
       session.lastPersistedPositionBucket = position.inSeconds ~/ 5;
       _refreshNotificationSubtitleForSession(
         session,
@@ -398,9 +428,9 @@ extension AudioProviderPlayback on AudioProvider {
   Future<void> seekSessionToPrev(String sessionId) async {
     final session = _sessions[sessionId];
     if (session == null || session.isLoading) return;
-    if (session.player.position.inSeconds > 3) {
-      await session.player.seek(Duration.zero);
-      session.lastKnownPosition = Duration.zero;
+    if (session.position.inSeconds > 3) {
+      await NativePlaybackBridge.instance.seek(session.id, Duration.zero);
+      session.setOptimisticPosition(Duration.zero);
       session.lastPersistedPositionBucket = 0;
       _refreshNotificationSubtitleForSession(
         session,
@@ -417,7 +447,10 @@ extension AudioProviderPlayback on AudioProvider {
   }
 
   Future<void> pauseAllSessions() async {
-    await Future.wait(_sessions.values.map((s) => s.player.pause()));
+    await NativePlaybackBridge.instance.pauseAll();
+    for (final session in _sessions.values) {
+      session.setOptimisticState(playing: false);
+    }
     _syncKeepCpuAwake();
     _scheduleSaveSessionState();
   }
@@ -503,7 +536,8 @@ extension AudioProviderPlayback on AudioProvider {
       );
 
     for (final session in _sessions.values) {
-      session.player.pause();
+      unawaited(NativePlaybackBridge.instance.pause(session.id));
+      session.setOptimisticState(playing: false);
     }
 
     _notifyListeners();
@@ -626,8 +660,9 @@ extension AudioProviderPlayback on AudioProvider {
     return 'session_${DateTime.now().microsecondsSinceEpoch}_$_sessionSeed';
   }
 
-  bool get _hasPlaybackToKeepAlive =>
-      _sessions.values.any((s) => s.state.playing || s.isLoading);
+  bool get _hasPlaybackToKeepAlive => _sessions.values.any(
+    (s) => s.state.playing || s.isLoading || s.isPlaybackStarting,
+  );
 
   bool get _hasRetainedPlaybackSession => _sessions.isNotEmpty;
 
@@ -636,12 +671,13 @@ extension AudioProviderPlayback on AudioProvider {
 
   void _syncKeepCpuAwake() {
     final hasPlayback = _hasPlaybackToKeepAlive;
+    final shouldKeepPlaybackAwake = false;
     final hasTimer =
         _timerActive || _timerWaitingForPlayback || _hasPendingAutoResume;
-    final usesUnifiedNotifications = _shouldUseUnifiedPlaybackNotifications;
-    final keepForegroundServiceAlive =
-        hasPlayback || hasTimer || usesUnifiedNotifications;
-    final shouldKeepAwake = hasPlayback || hasTimer;
+    final usesUnifiedNotifications = false;
+    final keepForegroundServiceAlive = hasTimer && !hasPlayback;
+    final shouldKeepAwake =
+        shouldKeepPlaybackAwake || keepForegroundServiceAlive;
     if (_keepCpuAwake == shouldKeepAwake &&
         _keepAliveHasPlayback == hasPlayback &&
         _keepAliveHasTimer == hasTimer &&
@@ -729,11 +765,33 @@ extension AudioProviderPlayback on AudioProvider {
     }
 
     _notificationFocusSessionId = session.id;
-    unawaited(session.player.play());
+    session.isPlaybackStarting = true;
     _syncKeepCpuAwake();
+    session.setOptimisticState(
+      playing: true,
+      processingState: session.state.processingState == ProcessingState.idle
+          ? ProcessingState.loading
+          : null,
+    );
+    unawaited(NativePlaybackBridge.instance.play(session.id));
+    _syncKeepCpuAwake();
+    unawaited(_clearPlaybackStartingIfStillPending(session.id));
     if (shouldStartTriggerCountdown) {
       _maybeStartTriggerCountdown();
     }
+  }
+
+  Future<void> _clearPlaybackStartingIfStillPending(String sessionId) async {
+    await Future<void>.delayed(const Duration(seconds: 8));
+    final session = _sessions[sessionId];
+    if (session == null ||
+        !session.isPlaybackStarting ||
+        session.state.playing) {
+      return;
+    }
+    session.isPlaybackStarting = false;
+    _syncKeepCpuAwake();
+    _syncNotificationState();
   }
 
   Future<void> _resetSessionsForSingleThreadMode() async {
@@ -744,8 +802,13 @@ extension AudioProviderPlayback on AudioProvider {
     }
 
     await Future.wait(
-      _sessions.values.map((session) => session.player.pause()),
+      _sessions.values.map(
+        (session) => NativePlaybackBridge.instance.pause(session.id),
+      ),
     );
+    for (final session in _sessions.values) {
+      session.setOptimisticState(playing: false);
+    }
     _syncKeepCpuAwake();
     _notificationFocusSessionId = null;
     _syncNotificationState();
@@ -774,7 +837,12 @@ extension AudioProviderPlayback on AudioProvider {
       return;
     }
 
-    await Future.wait(sessionsToPause.map((session) => session.player.pause()));
+    await Future.wait(
+      sessionsToPause.map((session) {
+        session.setOptimisticState(playing: false);
+        return NativePlaybackBridge.instance.pause(session.id);
+      }),
+    );
     _notificationFocusSessionId = keepSessionId;
     _syncKeepCpuAwake();
     _syncNotificationState();
@@ -804,7 +872,11 @@ extension AudioProviderPlayback on AudioProvider {
 
   Future<void> _handleSessionCompleted(String sessionId) async {
     final session = _sessions[sessionId];
-    if (session == null || session.isLoading) return;
+    if (session == null) return;
+    if (session.isLoading &&
+        session.state.processingState != ProcessingState.completed) {
+      return;
+    }
     if (session.loopMode == SessionLoopMode.single) {
       return;
     }
@@ -812,11 +884,29 @@ extension AudioProviderPlayback on AudioProvider {
     final nextPath = _nextPathFor(session, forward: true);
     if (nextPath == null) return;
 
+    session.isLoading = true;
+    _syncKeepCpuAwake();
+    _syncNotificationState();
+
     if (nextPath == session.currentTrackPath) {
-      await session.player.seek(Duration.zero);
-      await _startSessionPlayback(session, shouldStartTriggerCountdown: false);
+      try {
+        await NativePlaybackBridge.instance.seek(session.id, Duration.zero);
+        session.setOptimisticPosition(Duration.zero);
+      } finally {
+        if (_sessions.containsKey(session.id)) {
+          session.isLoading = false;
+          _syncNotificationState();
+          _notifyListeners();
+        }
+      }
+      if (_sessions.containsKey(session.id)) {
+        await _startSessionPlayback(
+          session,
+          shouldStartTriggerCountdown: false,
+        );
+      }
     } else {
-      await _prepareAndPlay(session, nextPath: nextPath);
+      await _prepareAndPlay(session, nextPath: nextPath, markLoading: false);
     }
   }
 

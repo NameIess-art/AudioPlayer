@@ -14,6 +14,7 @@ import 'package:path/path.dart' as path;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/playback_notification_handler.dart';
+import '../services/native_playback_bridge.dart';
 import '../services/subtitle_parser.dart';
 
 part 'audio_provider_models.dart';
@@ -143,6 +144,7 @@ class AudioProvider with ChangeNotifier {
   Timer? _saveSessionOrderTimer;
   Future<void> _sessionPreparationQueue = Future<void>.value();
   Timer? _notificationActionRefreshTimer;
+  StreamSubscription<NativePlaybackSnapshot>? _nativePlaybackSubscription;
 
   final List<String> _pausedByTimerPaths = [];
 
@@ -215,6 +217,9 @@ class AudioProvider with ChangeNotifier {
 
   AudioProvider({required PlaybackNotificationHandler notificationHandler})
     : _notificationHandler = notificationHandler {
+    NativePlaybackBridge.instance.startListening();
+    _nativePlaybackSubscription = NativePlaybackBridge.instance.snapshots
+        .listen(_handleNativePlaybackSnapshot);
     _bindNotificationHandler();
     _loadData();
   }
@@ -240,6 +245,8 @@ class AudioProvider with ChangeNotifier {
       ),
     );
     unawaited(_deactivateAudioSession());
+    unawaited(_nativePlaybackSubscription?.cancel());
+    unawaited(NativePlaybackBridge.instance.stopListening());
     for (final session in _sessions.values) {
       session.dispose();
     }
@@ -300,5 +307,11 @@ class AudioProvider with ChangeNotifier {
 
   void _notifyListeners() {
     notifyListeners();
+  }
+
+  void _handleNativePlaybackSnapshot(NativePlaybackSnapshot snapshot) {
+    final session = _sessions[snapshot.sessionId];
+    if (session == null) return;
+    session.applyNativeSnapshot(snapshot);
   }
 }

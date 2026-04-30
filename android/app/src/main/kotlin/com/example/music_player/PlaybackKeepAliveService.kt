@@ -14,7 +14,6 @@ import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
 import androidx.media.app.NotificationCompat.MediaStyle
 
@@ -33,9 +32,7 @@ class PlaybackKeepAliveService : Service() {
         private const val UNIFIED_CHANNEL_ID = "com.example.music_player.channel.playback"
         private const val CHANNEL_NAME = "Playback"
         private const val GROUP_KEY = "com.example.music_player.PLAYBACK_GROUP"
-        private const val AUDIO_SERVICE_NOTIFICATION_ID = 1124
         private const val NOTIFICATION_ID = 1107
-        private const val UNIFIED_NOTIFICATION_ID = 11_225
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
@@ -83,54 +80,33 @@ class PlaybackKeepAliveService : Service() {
                 } else {
                     createNotificationChannels()
                     syncMediaSession(hasActivePlayback = hasActivePlayback)
-                    val notificationId = if (usesUnifiedPlaybackNotification) {
-                        UNIFIED_NOTIFICATION_ID
-                    } else if (hasActivePlayback) {
-                        AUDIO_SERVICE_NOTIFICATION_ID
-                    } else {
-                        NOTIFICATION_ID
-                    }
                     val foregroundSignature = listOf(
-                        notificationId,
+                        NOTIFICATION_ID,
                         hasActivePlayback,
                         hasActiveTimer,
                         usesUnifiedPlaybackNotification,
                         keepForegroundServiceAlive
                     ).joinToString("|")
                     val needsForegroundRefresh =
-                        currentNotificationId != notificationId ||
+                        currentNotificationId != NOTIFICATION_ID ||
                             currentForegroundSignature != foregroundSignature
 
                     if (needsForegroundRefresh) {
-                        val foregroundNotification = if (usesUnifiedPlaybackNotification) {
-                            activeUnifiedNotification() ?: buildNotification(
-                                hasActivePlayback = hasActivePlayback,
-                                hasActiveTimer = hasActiveTimer,
-                                usesUnifiedPlaybackNotification = true
-                            )
-                        } else if (hasActivePlayback) {
-                            activeAudioServiceNotification() ?: buildNotification(
-                                hasActivePlayback = hasActivePlayback,
-                                hasActiveTimer = hasActiveTimer,
-                                usesUnifiedPlaybackNotification = false
-                            )
-                        } else {
+                        ServiceCompat.startForeground(
+                            this,
+                            NOTIFICATION_ID,
                             buildNotification(
                                 hasActivePlayback = hasActivePlayback,
                                 hasActiveTimer = hasActiveTimer,
-                                usesUnifiedPlaybackNotification = false
-                            )
-                        }
-                        ServiceCompat.startForeground(
-                            this,
-                            notificationId,
-                            foregroundNotification,
+                                usesUnifiedPlaybackNotification =
+                                    usesUnifiedPlaybackNotification
+                            ),
                             ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
                         )
-                        currentNotificationId = notificationId
+                        currentNotificationId = NOTIFICATION_ID
                         currentForegroundSignature = foregroundSignature
                     } else {
-                        currentNotificationId = notificationId
+                        currentNotificationId = NOTIFICATION_ID
                     }
                     if (hasActivePlayback || hasActiveTimer) {
                         acquireWakeLock()
@@ -144,6 +120,7 @@ class PlaybackKeepAliveService : Service() {
     }
 
     override fun onDestroy() {
+        stopForegroundCompat()
         releaseWakeLock()
         releaseMediaSession()
         currentForegroundSignature = null
@@ -157,11 +134,11 @@ class PlaybackKeepAliveService : Service() {
         usesUnifiedPlaybackNotification: Boolean
     ): Notification {
         val contentText = if (hasActiveTimer) {
-            "Sleep timer is active."
+            "睡眠定时器运行中"
         } else if (usesUnifiedPlaybackNotification) {
-            "Playback active"
+            "正在播放"
         } else if (hasActivePlayback) {
-            "Playback active"
+            "正在播放"
         } else {
             null
         }
@@ -283,26 +260,6 @@ class PlaybackKeepAliveService : Service() {
             release()
         }
         mediaSession = null
-    }
-
-    private fun activeUnifiedNotification(): Notification? {
-        return activeNotification(UNIFIED_NOTIFICATION_ID)
-    }
-
-    private fun activeAudioServiceNotification(): Notification? {
-        return activeNotification(AUDIO_SERVICE_NOTIFICATION_ID)
-    }
-
-    private fun activeNotification(notificationId: Int): Notification? {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
-            return null
-        }
-        val manager = getSystemService(NotificationManager::class.java) ?: return null
-        return manager.activeNotifications
-            ?.firstOrNull { statusBarNotification ->
-                statusBarNotification.id == notificationId
-            }
-            ?.notification
     }
 
     private fun createNotificationChannels() {

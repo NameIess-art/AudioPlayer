@@ -7,6 +7,7 @@ import android.app.PendingIntent;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ServiceInfo;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.media.AudioManager;
@@ -682,8 +683,8 @@ public class AudioService extends MediaBrowserServiceCompat {
         if (config.androidNotificationOngoing) {
             style.setShowCancelButton(true);
             style.setCancelButtonIntent(buildMediaButtonPendingIntent(PlaybackStateCompat.ACTION_STOP));
-            builder.setOngoing(true);
         }
+        builder.setOngoing(shouldKeepNotificationOngoing());
         builder.setStyle(style);
         return builder.build();
     }
@@ -705,7 +706,7 @@ public class AudioService extends MediaBrowserServiceCompat {
         builder.setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_SUMMARY);
         builder.setCategory(NotificationCompat.CATEGORY_TRANSPORT);
         builder.setOnlyAlertOnce(true);
-        builder.setOngoing(config.androidNotificationOngoing);
+        builder.setOngoing(shouldKeepNotificationOngoing());
         builder.setSortKey("0_summary");
 
         if (summaryTitle != null) {
@@ -747,6 +748,9 @@ public class AudioService extends MediaBrowserServiceCompat {
                 createChannel();
             notificationBuilder = new NotificationCompat.Builder(this, notificationChannelId)
                     .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                    .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
+                    .setOnlyAlertOnce(true)
+                    .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
                     .setShowWhen(false)
                     .setDeleteIntent(buildDeletePendingIntent())
             ;
@@ -792,8 +796,11 @@ public class AudioService extends MediaBrowserServiceCompat {
     }
 
     private void exitPlayingState() {
-        if (config.androidStopForegroundOnPause) {
+        if (config.androidStopForegroundOnPause && !config.androidNotificationOngoing) {
             exitForegroundState();
+        } else {
+            releaseWakeLock();
+            updateNotification();
         }
     }
 
@@ -803,8 +810,17 @@ public class AudioService extends MediaBrowserServiceCompat {
     }
 
     private void internalStartForeground() {
-        startForeground(NOTIFICATION_ID, buildNotification());
+        ServiceCompat.startForeground(
+            this,
+            NOTIFICATION_ID,
+            buildNotification(),
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+        );
         notificationCreated = true;
+    }
+
+    private boolean shouldKeepNotificationOngoing() {
+        return config.androidNotificationOngoing || playing;
     }
 
     private void acquireWakeLock() {
