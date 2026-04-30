@@ -81,6 +81,8 @@ class AudioProvider with ChangeNotifier {
   String? _unifiedNotificationSyncKey;
   Timer? _notificationProgressRefreshTimer;
   Timer? _unifiedNotificationSyncTimer;
+  Timer? _multiThreadNotificationRebuildTimer;
+  DateTime? _multiThreadNotificationRebuildSuppressedUntil;
   bool _unifiedNotificationSyncInFlight = false;
   bool _unifiedNotificationSyncPending = false;
   String? _queuedNotificationRefreshSessionId;
@@ -232,6 +234,7 @@ class AudioProvider with ChangeNotifier {
     _saveSessionOrderTimer?.cancel();
     _notificationProgressRefreshTimer?.cancel();
     _unifiedNotificationSyncTimer?.cancel();
+    _multiThreadNotificationRebuildTimer?.cancel();
     _notificationActionRefreshTimer?.cancel();
     unawaited(_saveSessionState());
     unawaited(_saveSessionOrder());

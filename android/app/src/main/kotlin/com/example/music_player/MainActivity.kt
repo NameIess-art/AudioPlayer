@@ -125,7 +125,8 @@ private object UnifiedPlaybackNotificationController {
         items: List<UnifiedPlaybackNotificationItem>,
         showSummary: Boolean,
         summaryText: String?,
-        summaryLines: List<String>
+        summaryLines: List<String>,
+        suppressRebuild: Boolean
     ) {
         val manager = NotificationManagerCompat.from(context)
         ensureChannel(context)
@@ -144,7 +145,8 @@ private object UnifiedPlaybackNotificationController {
                 mainSessionId,
                 items,
                 summaryText,
-                summaryLines
+                summaryLines,
+                suppressRebuild
             )
             return
         }
@@ -198,7 +200,8 @@ private object UnifiedPlaybackNotificationController {
         mainSessionId: String?,
         items: List<UnifiedPlaybackNotificationItem>,
         summaryText: String?,
-        summaryLines: List<String>
+        summaryLines: List<String>,
+        suppressRebuild: Boolean
     ) {
         val previousIds = buildSet {
             addAll(activeNotificationIds)
@@ -223,7 +226,7 @@ private object UnifiedPlaybackNotificationController {
         }
         val summaryChanged = summarySignature != lastSummarySignature
         if (
-            summaryChanged ||
+            (!suppressRebuild && summaryChanged) ||
                 !postedNotificationIds.contains(summaryNotificationId)
         ) {
             manager.notify(
@@ -241,7 +244,10 @@ private object UnifiedPlaybackNotificationController {
         for (item in items) {
             val notificationId = notificationIdFor(item.id)
             if (
-                activeItemsById[item.id]?.hasSameStableNotification(item) != true ||
+                (
+                    !suppressRebuild &&
+                        activeItemsById[item.id]?.hasSameStableNotification(item) != true
+                    ) ||
                     !postedNotificationIds.contains(notificationId)
             ) {
                 manager.notify(
@@ -255,14 +261,16 @@ private object UnifiedPlaybackNotificationController {
         previousIds
             .filterNot(nextIds::contains)
             .forEach(manager::cancel)
-        activeItemsById.clear()
-        items.forEach { item -> activeItemsById[item.id] = item }
-        activeNotificationIds.apply {
-            clear()
-            addAll(nextIds)
+        if (!suppressRebuild) {
+            activeItemsById.clear()
+            items.forEach { item -> activeItemsById[item.id] = item }
+            activeNotificationIds.apply {
+                clear()
+                addAll(nextIds)
+            }
+            lastSummarySignature = summarySignature
+            savePersistedNotificationIds(context, nextIds)
         }
-        lastSummarySignature = summarySignature
-        savePersistedNotificationIds(context, nextIds)
     }
 
     private fun buildSingleSessionNotification(
@@ -690,6 +698,8 @@ class MainActivity : AudioServiceActivity() {
                         val summaryText = call.argument<String>("summaryText")
                         val summaryLines =
                             call.argument<List<String>>("summaryLines") ?: emptyList()
+                        val suppressRebuild =
+                            call.argument<Boolean>("suppressRebuild") ?: false
                         val items = rawItems.mapNotNull { raw ->
                             val id = raw["id"] as? String ?: return@mapNotNull null
                             val title = raw["title"] as? String ?: return@mapNotNull null
@@ -710,7 +720,8 @@ class MainActivity : AudioServiceActivity() {
                             items,
                             showSummary,
                             summaryText,
-                            summaryLines
+                            summaryLines,
+                            suppressRebuild
                         )
                         result.success(null)
                     }

@@ -123,7 +123,9 @@ extension AudioProviderNotifications on AudioProvider {
       _scheduleNotificationActionRefresh();
       return;
     }
-    _notificationFocusSessionId = session.id;
+    if (!_multiThreadPlaybackEnabled) {
+      _notificationFocusSessionId = session.id;
+    }
     await toggleSessionPlayPause(session.id);
     _scheduleNotificationActionRefresh();
   }
@@ -134,7 +136,9 @@ extension AudioProviderNotifications on AudioProvider {
       _scheduleNotificationActionRefresh();
       return;
     }
-    _notificationFocusSessionId = session.id;
+    if (!_multiThreadPlaybackEnabled) {
+      _notificationFocusSessionId = session.id;
+    }
     await seekSessionToPrev(session.id);
     _scheduleNotificationActionRefresh();
   }
@@ -145,7 +149,9 @@ extension AudioProviderNotifications on AudioProvider {
       _scheduleNotificationActionRefresh();
       return;
     }
-    _notificationFocusSessionId = session.id;
+    if (!_multiThreadPlaybackEnabled) {
+      _notificationFocusSessionId = session.id;
+    }
     await seekSessionToNext(session.id);
     _scheduleNotificationActionRefresh();
   }
@@ -240,6 +246,7 @@ extension AudioProviderNotifications on AudioProvider {
   }
 
   void _scheduleNotificationActionRefresh() {
+    _suppressMultiThreadNotificationRebuildBriefly();
     _syncNotificationState();
     _notifyListeners();
 
@@ -252,6 +259,32 @@ extension AudioProviderNotifications on AudioProvider {
         _notifyListeners();
       },
     );
+  }
+
+  void _suppressMultiThreadNotificationRebuildBriefly() {
+    if (!_multiThreadPlaybackEnabled) return;
+    final suppressedUntil = DateTime.now().add(const Duration(seconds: 8));
+    _multiThreadNotificationRebuildSuppressedUntil = suppressedUntil;
+    _multiThreadNotificationRebuildTimer?.cancel();
+    _multiThreadNotificationRebuildTimer = Timer(
+      const Duration(seconds: 8),
+      () {
+        if (_multiThreadNotificationRebuildSuppressedUntil != suppressedUntil) {
+          return;
+        }
+        _multiThreadNotificationRebuildSuppressedUntil = null;
+        _multiThreadNotificationRebuildTimer = null;
+        _unifiedNotificationSyncKey = null;
+        _requestUnifiedPlaybackNotificationFlush();
+      },
+    );
+  }
+
+  bool get _shouldSuppressMultiThreadNotificationRebuild {
+    final suppressedUntil = _multiThreadNotificationRebuildSuppressedUntil;
+    return _multiThreadPlaybackEnabled &&
+        suppressedUntil != null &&
+        DateTime.now().isBefore(suppressedUntil);
   }
 
   Future<void> _resumeNotificationSession(PlaybackSession session) async {
@@ -814,7 +847,8 @@ extension AudioProviderNotifications on AudioProvider {
       'summaryText': summaryText,
       'summaryLines': summaryLines,
     });
-    if (_unifiedNotificationSyncKey == nextSyncKey) {
+    final suppressRebuild = _shouldSuppressMultiThreadNotificationRebuild;
+    if (_unifiedNotificationSyncKey == nextSyncKey && !suppressRebuild) {
       return;
     }
 
@@ -831,10 +865,13 @@ extension AudioProviderNotifications on AudioProvider {
             'showSummary': showUnifiedSummary,
             'summaryText': summaryText,
             'summaryLines': summaryLines,
+            'suppressRebuild': suppressRebuild,
           },
         );
       }
-      _unifiedNotificationSyncKey = nextSyncKey;
+      if (!suppressRebuild) {
+        _unifiedNotificationSyncKey = nextSyncKey;
+      }
     } on MissingPluginException {
       debugPrint(
         'AudioProvider._syncUnifiedPlaybackNotifications: notifications '
