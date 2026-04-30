@@ -784,10 +784,7 @@ extension AudioProviderNotifications on AudioProvider {
         : null;
     final summaryLines = showUnifiedSummary && isMultiMode
         ? sessionsToShow
-              .map((session) {
-                final marker = session.state.playing ? '*' : '-';
-                return '$marker ${_notificationTitleForSession(session)}';
-              })
+              .map(_notificationTitleForSession)
               .toList(growable: false)
         : const <String>[];
 

@@ -63,7 +63,7 @@ class NativePlaybackService : MediaSessionService() {
             if (!hasActivePlayback()) {
                 foregroundWatchdogScheduled = false
                 releasePlaybackWakeLock()
-                stopPlaybackForeground()
+                stopPlaybackForeground(removeNotification = sessions.isEmpty())
                 return
             }
             acquirePlaybackWakeLock()
@@ -92,7 +92,7 @@ class NativePlaybackService : MediaSessionService() {
         } else {
             stopForegroundWatchdog()
             releasePlaybackWakeLock()
-            stopPlaybackForeground()
+            stopPlaybackForeground(removeNotification = sessions.isEmpty())
             stopSelf()
         }
     }
@@ -107,7 +107,7 @@ class NativePlaybackService : MediaSessionService() {
         sessions.values.forEach { it.release() }
         sessions.clear()
         releasePlaybackWakeLock()
-        stopPlaybackForeground()
+        stopPlaybackForeground(removeNotification = true)
         instance = null
         super.onDestroy()
     }
@@ -219,7 +219,7 @@ class NativePlaybackService : MediaSessionService() {
         if (sessions.isEmpty()) {
             stopForegroundWatchdog()
             releasePlaybackWakeLock()
-            stopPlaybackForeground()
+            stopPlaybackForeground(removeNotification = true)
             stopSelf()
         } else {
             syncForegroundState()
@@ -232,7 +232,7 @@ class NativePlaybackService : MediaSessionService() {
         publishAllSessionStates()
         stopForegroundWatchdog()
         releasePlaybackWakeLock()
-        stopPlaybackForeground()
+        stopPlaybackForeground(removeNotification = sessions.isEmpty())
         return okResult(null)
     }
 
@@ -243,7 +243,7 @@ class NativePlaybackService : MediaSessionService() {
         updateMediaSessionPlayer()
         stopForegroundWatchdog()
         releasePlaybackWakeLock()
-        stopPlaybackForeground()
+        stopPlaybackForeground(removeNotification = true)
         stopSelf()
         return okResult(null)
     }
@@ -331,7 +331,7 @@ class NativePlaybackService : MediaSessionService() {
         } else {
             stopForegroundWatchdog()
             releasePlaybackWakeLock()
-            stopPlaybackForeground()
+            stopPlaybackForeground(removeNotification = sessions.isEmpty())
         }
     }
 
@@ -355,13 +355,19 @@ class NativePlaybackService : MediaSessionService() {
         }
     }
 
-    private fun stopPlaybackForeground() {
+    private fun stopPlaybackForeground(removeNotification: Boolean = true) {
         if (!foregroundStarted) return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopForeground(
+                if (removeNotification) {
+                    STOP_FOREGROUND_REMOVE
+                } else {
+                    STOP_FOREGROUND_DETACH
+                }
+            )
         } else {
             @Suppress("DEPRECATION")
-            stopForeground(true)
+            stopForeground(removeNotification)
         }
         foregroundStarted = false
     }

@@ -89,6 +89,21 @@ private data class UnifiedPlaybackNotificationItem(
     val hasNext: Boolean
 )
 
+private fun UnifiedPlaybackNotificationItem.hasSameStableNotification(
+    other: UnifiedPlaybackNotificationItem
+): Boolean {
+    return id == other.id &&
+        title == other.title &&
+        subtitle == other.subtitle &&
+        artPath == other.artPath &&
+        hasPrevious == other.hasPrevious &&
+        hasNext == other.hasNext
+}
+
+private fun UnifiedPlaybackNotificationItem.stableNotificationSignature(): String {
+    return "$id:$title:$subtitle:$artPath:$hasPrevious:$hasNext"
+}
+
 private object UnifiedPlaybackNotificationController {
     private const val channelId = "com.example.music_player.channel.playback"
     private const val channelName = "Playback"
@@ -198,14 +213,12 @@ private object UnifiedPlaybackNotificationController {
             append('\u0000')
             append(mainItem.id)
             append('\u0000')
-            append(mainItem.playing)
-            append('\u0000')
             append(summaryText.orEmpty())
             append('\u0000')
             append(summaryLines.joinToString("\n"))
             append('\u0000')
             append(items.joinToString("|") {
-                "${it.id}:${it.title}:${it.subtitle}:${it.playing}:${it.hasPrevious}:${it.hasNext}"
+                it.stableNotificationSignature()
             })
         }
         val summaryChanged = summarySignature != lastSummarySignature
@@ -228,7 +241,7 @@ private object UnifiedPlaybackNotificationController {
         for (item in items) {
             val notificationId = notificationIdFor(item.id)
             if (
-                activeItemsById[item.id] != item ||
+                activeItemsById[item.id]?.hasSameStableNotification(item) != true ||
                     !postedNotificationIds.contains(notificationId)
             ) {
                 manager.notify(
