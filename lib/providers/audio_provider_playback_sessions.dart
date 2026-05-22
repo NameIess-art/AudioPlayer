@@ -45,7 +45,7 @@ extension AudioProviderPlaybackSessions on AudioProvider {
     double volume = 1.0,
     List<MusicTrack>? customQueueTracks,
   }) {
-    return PlaybackSession(
+    final session = PlaybackSession(
       id: _nextSessionId(),
       currentTrackPath: track.path,
       loopMode: loopMode,
@@ -57,6 +57,13 @@ extension AudioProviderPlaybackSessions on AudioProvider {
       state: PlayerState(false, ProcessingState.idle),
       customQueueTracks: customQueueTracks,
     );
+    session.lastKnownPosition = track.lastPlayedPosition;
+    session.lastPersistedPositionBucket =
+        track.lastPlayedPosition.inSeconds ~/ 5;
+    if (track.duration > Duration.zero) {
+      session.setOptimisticDuration(track.duration);
+    }
+    return session;
   }
 
   void _registerSession(PlaybackSession session) {
@@ -135,6 +142,7 @@ extension AudioProviderPlaybackSessions on AudioProvider {
       final positionBucket = position.inSeconds ~/ 5;
       if (positionBucket != session.lastPersistedPositionBucket) {
         session.lastPersistedPositionBucket = positionBucket;
+        _persistTrackPlaybackPosition(session, position);
         _scheduleSaveSessionState(delay: const Duration(milliseconds: 800));
       }
       if (!_isNotificationFocusedSessionId(session.id)) return;
@@ -180,6 +188,7 @@ extension AudioProviderPlaybackSessions on AudioProvider {
     session.playbackCommandGeneration = generation;
 
     final wasLoading = session.isLoading;
+    _persistTrackPlaybackPosition(session, session.position);
     session.isLoading = true;
     _syncKeepCpuAwake();
     _syncNotificationState();
@@ -195,13 +204,17 @@ extension AudioProviderPlaybackSessions on AudioProvider {
         return;
       }
 
+      final startPosition = _lastPlaybackPositionForPath(
+        session,
+        resolvedNextPath,
+      );
       session.currentTrackPath = resolvedNextPath;
-      session.lastPersistedPositionBucket = 0;
+      session.lastPersistedPositionBucket = startPosition.inSeconds ~/ 5;
       if (!PathMatcher.isRemoteUri(resolvedNextPath)) {
         _ensureSubtitleTrackLoaded(resolvedNextPath);
         _refreshNotificationSubtitleForSession(
           session,
-          position: Duration.zero,
+          position: startPosition,
           syncNotification: false,
         );
       }
@@ -218,8 +231,11 @@ extension AudioProviderPlaybackSessions on AudioProvider {
       final isNewTrack = session.loadedPath != resolvedNextPath;
       if (isNewTrack) {
         session.resetStreamsForNewTrack();
+        if (startPosition > Duration.zero) {
+          session.setOptimisticPosition(startPosition);
+        }
       } else {
-        session.setOptimisticPosition(Duration.zero);
+        session.setOptimisticPosition(startPosition);
       }
       _markActiveSessionsDirty();
       _notifyListeners();
@@ -249,6 +265,7 @@ extension AudioProviderPlaybackSessions on AudioProvider {
             path: resolvedNextPath,
             subtitle: track?.groupTitle,
             artUri: artUri,
+            startPosition: startPosition,
             volume: session.volume,
             repeatOne: session.loopMode == SessionLoopMode.single,
             queue: _nativePlaybackQueueFor(
@@ -278,7 +295,7 @@ extension AudioProviderPlaybackSessions on AudioProvider {
         if (!ok) return;
         session.loadedPath = resolvedNextPath;
       } else {
-        await _nativePlaybackRepository.seek(session.id, Duration.zero);
+        await _nativePlaybackRepository.seek(session.id, startPosition);
         if (!_sessions.containsKey(session.id) ||
             session.loadGeneration != generation) {
           return;
@@ -413,5 +430,72 @@ extension AudioProviderPlaybackSessions on AudioProvider {
       }
     }
     return trackByPath(resolvedPath);
+  }
+
+  Duration _lastPlaybackPositionForPath(
+    PlaybackSession session,
+    String trackPath,
+  ) {
+    final track = _sessionTrackForPath(session, trackPath);
+    if (track == null) return Duration.zero;
+    if (PathMatcher.equalsNormalized(session.currentTrackPath, trackPath) &&
+        session.position > track.lastPlayedPosition) {
+      return _positionForPlaybackStart(
+        track.copyWith(lastPlayedPosition: session.position),
+      );
+    }
+    return _positionForPlaybackStart(track);
+  }
+
+  Duration _positionForPlaybackStart(MusicTrack track) {
+    final position = track.lastPlayedPosition;
+    if (position <= Duration.zero) return Duration.zero;
+    final duration = track.duration;
+    if (duration > Duration.zero &&
+        duration - position <= const Duration(seconds: 2)) {
+      return Duration.zero;
+    }
+    return position;
+  }
+
+  void _persistTrackPlaybackPosition(
+    PlaybackSession session,
+    Duration position,
+  ) {
+    final trackPath = session.currentTrackPath;
+    final existing = trackByPath(trackPath);
+    if (existing == null) return;
+    final safePosition = _positionForPlaybackSave(session, position);
+    final playedAt = DateTime.now();
+    final updatedTrack = existing.copyWith(
+      lastPlayedPosition: safePosition,
+      lastPlayedAt: playedAt,
+      duration: session.duration ?? existing.duration,
+    );
+    if (updatedTrack.toJson().toString() == existing.toJson().toString()) {
+      return;
+    }
+    final index = _library.indexWhere(
+      (track) => PathMatcher.equalsNormalized(track.path, trackPath),
+    );
+    if (index >= 0) {
+      _library[index] = updatedTrack;
+      _libraryByPath[updatedTrack.path] = updatedTrack;
+      unawaited(_audioDatabaseRepository.upsertTracks([updatedTrack]));
+    }
+  }
+
+  Duration _positionForPlaybackSave(
+    PlaybackSession session,
+    Duration position,
+  ) {
+    final safePosition = position < Duration.zero ? Duration.zero : position;
+    final duration = session.duration;
+    if (duration != null &&
+        duration > Duration.zero &&
+        duration - safePosition <= const Duration(seconds: 2)) {
+      return Duration.zero;
+    }
+    return safePosition;
   }
 }

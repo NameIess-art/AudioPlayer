@@ -221,6 +221,8 @@ extension AudioProviderPlayback on AudioProvider {
       await _nativePlaybackRepository.seek(session.id, position);
       session.setOptimisticPosition(position);
       session.lastPersistedPositionBucket = position.inSeconds ~/ 5;
+      _persistTrackPlaybackPosition(session, position);
+      _scheduleSaveSessionState(delay: const Duration(milliseconds: 800));
       _refreshNotificationSubtitleForSession(
         session,
         position: position,
@@ -253,6 +255,8 @@ extension AudioProviderPlayback on AudioProvider {
       await _nativePlaybackRepository.seek(session.id, Duration.zero);
       session.setOptimisticPosition(Duration.zero);
       session.lastPersistedPositionBucket = 0;
+      _persistTrackPlaybackPosition(session, Duration.zero);
+      _scheduleSaveSessionState(delay: const Duration(milliseconds: 800));
       _refreshNotificationSubtitleForSession(
         session,
         position: Duration.zero,

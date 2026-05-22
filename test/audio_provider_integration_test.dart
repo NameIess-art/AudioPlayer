@@ -78,6 +78,121 @@ void main() {
     });
   });
 
+  group('playback position persistence', () {
+    test('new sessions start from the track last played position', () async {
+      final trackPath =
+          '${Directory.systemTemp.path}${Platform.pathSeparator}resume.mp3';
+      final track = MusicTrack(
+        path: trackPath,
+        displayName: 'resume',
+        groupKey: Directory.systemTemp.path,
+        groupTitle: 'Library',
+        groupSubtitle: Directory.systemTemp.path,
+        isSingle: false,
+        lastPlayedPosition: const Duration(seconds: 42),
+        duration: const Duration(minutes: 3),
+      );
+      provider.addTracks(<MusicTrack>[track], notify: false);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      Map<Object?, Object?>? prepareArgs;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(nativePlaybackChannel, (call) async {
+            if (call.method == NativePlaybackMethod.prepareSession) {
+              prepareArgs = call.arguments as Map<Object?, Object?>;
+              return <String, Object?>{
+                'ok': true,
+                'value': <String, Object?>{
+                  'sessionId': prepareArgs!['sessionId'] as String,
+                  'uri': Uri.file(track.path).toString(),
+                  'path': track.path,
+                  'title': track.displayName,
+                  'playing': false,
+                  'playWhenReady': false,
+                  'processingState': 'ready',
+                  'positionMs': prepareArgs!['startPositionMs'] as int,
+                  'bufferedPositionMs': 0,
+                  'durationMs': track.duration.inMilliseconds,
+                  'volume': 1.0,
+                  'boostGain': 1.0,
+                  'channelSwap': false,
+                },
+              };
+            }
+            return <String, Object?>{'ok': true};
+          });
+
+      await provider.spawnSession(track, autoPlay: false);
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+
+      expect(prepareArgs?['startPositionMs'], 42000);
+      expect(
+        provider.activeSessions.single.position,
+        const Duration(seconds: 42),
+      );
+    });
+
+    test(
+      'session position updates persist back to the library track',
+      () async {
+        final trackPath =
+            '${Directory.systemTemp.path}${Platform.pathSeparator}progress.mp3';
+        final track = MusicTrack(
+          path: trackPath,
+          displayName: 'progress',
+          groupKey: Directory.systemTemp.path,
+          groupTitle: 'Library',
+          groupSubtitle: Directory.systemTemp.path,
+          isSingle: false,
+        );
+        provider.addTracks(<MusicTrack>[track], notify: false);
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(nativePlaybackChannel, (call) async {
+              if (call.method == NativePlaybackMethod.prepareSession) {
+                final args = call.arguments as Map<Object?, Object?>;
+                return <String, Object?>{
+                  'ok': true,
+                  'value': <String, Object?>{
+                    'sessionId': args['sessionId'] as String,
+                    'uri': Uri.file(track.path).toString(),
+                    'path': track.path,
+                    'title': track.displayName,
+                    'playing': false,
+                    'playWhenReady': false,
+                    'processingState': 'ready',
+                    'positionMs': 0,
+                    'bufferedPositionMs': 0,
+                    'durationMs': 180000,
+                    'volume': 1.0,
+                    'boostGain': 1.0,
+                    'channelSwap': false,
+                  },
+                };
+              }
+              return <String, Object?>{'ok': true};
+            });
+
+        await provider.spawnSession(track, autoPlay: false);
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+        final session = provider.activeSessions.single;
+
+        session.setOptimisticPosition(const Duration(seconds: 17));
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+
+        final databaseTracks = await AppDatabase.test(db).loadAllTracks();
+        expect(
+          databaseTracks.single.lastPlayedPosition,
+          const Duration(seconds: 17),
+        );
+        expect(
+          provider.trackByPath(track.path)?.lastPlayedPosition,
+          const Duration(seconds: 17),
+        );
+      },
+    );
+  });
+
   group('custom queue session restore', () {
     test('restores ASMR custom queues and exposes sibling tracks', () async {
       const sessionId = 'asmr_session';

@@ -253,6 +253,30 @@ void main() {
       expect(controller.lastError, isNull);
     },
   );
+
+  test('ASMR local favorites survive startup remote sync', () async {
+    await resetPrefs();
+    final favorite = _work(id: 41, title: 'Saved Favorite');
+    await AsmrPreferences.saveAuthSession(
+      const AsmrAuthSession(
+        token: 'token-alice',
+        userName: 'alice',
+        userId: 7,
+        favoritePlaylistId: 42,
+      ),
+    );
+    await AsmrPreferences.saveFavoriteWorks(<AsmrWork>[favorite]);
+
+    final controller = AsmrLibraryController(apiService: _FakeAsmrApiService());
+    await controller.initialize(defaultLanguage: AsmrContentLanguage.en);
+
+    expect(controller.worksFor(AsmrCategoryType.favorites), hasLength(1));
+    expect(controller.worksFor(AsmrCategoryType.favorites).single.id, 41);
+    expect(
+      controller.worksFor(AsmrCategoryType.favorites).single.isFavorite,
+      isTrue,
+    );
+  });
 }
 
 class _FakeAsmrApiService extends AsmrApiService {
@@ -275,6 +299,11 @@ class _FakeAsmrApiService extends AsmrApiService {
     required String password,
   }) async {
     return AsmrAuthSession(token: 'token-$name', userName: name, userId: 7);
+  }
+
+  @override
+  Future<AsmrAuthSession> fetchAuthSession(String token) async {
+    return AsmrAuthSession(token: token, userName: 'alice', userId: 7);
   }
 
   @override

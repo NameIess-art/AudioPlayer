@@ -270,8 +270,8 @@ class _SessionDetailPageState extends ConsumerState<SessionDetailPage>
     AudioProvider provider,
   ) {
     final velocity = details.primaryVelocity ?? 0;
-    final shouldGoPrevious = _horizontalDragDelta > 48 || velocity > 400;
-    final shouldGoNext = _horizontalDragDelta < -48 || velocity < -400;
+    final shouldGoPrevious = _horizontalDragDelta > 32 || velocity > 260;
+    final shouldGoNext = _horizontalDragDelta < -32 || velocity < -260;
     _horizontalDragDelta = 0;
     if (shouldGoPrevious) {
       _changeSessionByOffset(provider, -1);

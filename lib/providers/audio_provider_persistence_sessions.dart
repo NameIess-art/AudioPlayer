@@ -180,7 +180,7 @@ extension AudioProviderPersistenceSessions on AudioProvider {
                 ),
               ),
               durationMs: entry.value.duration?.inMilliseconds ?? 0,
-              customQueueTracks: entry.value.customQueueTracks,
+              customQueueTracks: _customQueueTracksForPersistence(entry.value),
               channelSwapEnabled: entry.value.channelSwapEnabled,
               createdAtMs: entry.value.createdAt.millisecondsSinceEpoch,
               updatedAtMs: DateTime.now().millisecondsSinceEpoch,
@@ -212,5 +212,32 @@ extension AudioProviderPersistenceSessions on AudioProvider {
   void _scheduleSessionPersistence() {
     _scheduleSaveSessionState();
     _scheduleSaveSessionOrder();
+  }
+
+  List<MusicTrack>? _customQueueTracksForPersistence(PlaybackSession session) {
+    final tracks = session.customQueueTracks;
+    if (tracks == null) return null;
+    final position = max(
+      0,
+      max(
+        session.position.inMilliseconds,
+        session.lastKnownPosition.inMilliseconds,
+      ),
+    );
+    return tracks
+        .map((track) {
+          if (!PathMatcher.equalsNormalized(
+            track.path,
+            session.currentTrackPath,
+          )) {
+            return track;
+          }
+          return track.copyWith(
+            lastPlayedPosition: Duration(milliseconds: position),
+            lastPlayedAt: DateTime.now(),
+            duration: session.duration ?? track.duration,
+          );
+        })
+        .toList(growable: false);
   }
 }

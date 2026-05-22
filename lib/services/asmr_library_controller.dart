@@ -132,7 +132,9 @@ class AsmrLibraryController extends ChangeNotifier {
     _contentLanguage = await AsmrPreferences.loadContentLanguage(
       defaultLanguage ?? AsmrContentLanguage.zh,
     );
-    _favoriteWorks = await AsmrPreferences.loadFavoriteWorks();
+    _favoriteWorks = (await AsmrPreferences.loadFavoriteWorks())
+        .map((work) => work.copyWith(isFavorite: true))
+        .toList(growable: false);
     _historyWorks = await AsmrPreferences.loadHistoryWorks();
     for (final work in _favoriteWorks.followedBy(_historyWorks)) {
       _workCache[work.id] = work;
@@ -574,11 +576,13 @@ class AsmrLibraryController extends ChangeNotifier {
       playlistId: playlistId,
       language: _contentLanguage,
     );
-    final decorated = remoteWorks
-        .map((work) => work.copyWith(isFavorite: true))
-        .toList(growable: false);
-    _favoriteWorks = decorated;
-    for (final work in decorated.followedBy(_historyWorks)) {
+    final mergedById = <int, AsmrWork>{
+      for (final work in _favoriteWorks)
+        work.id: work.copyWith(isFavorite: true),
+      for (final work in remoteWorks) work.id: work.copyWith(isFavorite: true),
+    };
+    _favoriteWorks = mergedById.values.toList(growable: false);
+    for (final work in _favoriteWorks.followedBy(_historyWorks)) {
       _workCache[work.id] = work;
     }
     _applyFavoriteFlags();
